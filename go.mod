@@ -5,6 +5,7 @@ go 1.26.1
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.4 // reason: S3-compatible file storage for internal/storage package
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.1 // reason: S3 service client for file operations
+	github.com/go-chi/chi/v5 v5.2.5 // reason: HTTP routing for internal/api package
 	github.com/google/cel-go v0.27.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/rs/xid v1.6.0
@@ -30,6 +31,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.19.20 // indirect
 	github.com/aws/smithy-go v1.24.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
+	github.com/go-chi/chi/v5 v5.2.5 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

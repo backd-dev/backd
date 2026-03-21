@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"testing"
-	"time"
 
 	"github.com/backd-dev/backd/internal/config"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,7 +24,7 @@ func getTestDSN() string {
 // setupTestDB creates a test database
 func setupTestDB(t *testing.T, name string) *pgxpool.Pool {
 	ctx := context.Background()
-	
+
 	// Connect to postgres to create test database
 	serverDSN := fmt.Sprintf("postgres://postgres:password@localhost:5432/postgres?sslmode=disable")
 	pool, err := pgxpool.New(ctx, serverDSN)
@@ -59,7 +58,7 @@ func setupTestDB(t *testing.T, name string) *pgxpool.Pool {
 // cleanupTestDB drops the test database
 func cleanupTestDB(t *testing.T, name string) {
 	ctx := context.Background()
-	
+
 	serverDSN := fmt.Sprintf("postgres://postgres:password@localhost:5432/postgres?sslmode=disable")
 	pool, err := pgxpool.New(ctx, serverDSN)
 	if err != nil {

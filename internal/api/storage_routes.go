@@ -1,0 +1,79 @@
+package api
+
+import (
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+)
+
+// RegisterStorageRoutes registers file storage routes
+func RegisterStorageRoutes(r chi.Router, deps *Deps) {
+	// Storage routes: /api/v1/{app}/storage
+	r.Route("/storage", func(r chi.Router) {
+		// Upload file - POST /storage/upload
+		r.Post("/upload", Handler(handleFileUpload(deps)).Handle(deps))
+
+		// Delete file - DELETE /storage/{fileId}
+		r.Delete("/{fileId}", Handler(handleFileDelete(deps)).Handle(deps))
+	})
+}
+
+// File upload handler
+func handleFileUpload(deps *Deps) Handler {
+	return func(r *http.Request, rc *RequestContext) (any, error) {
+		// Check if storage is configured for this app
+		if deps.Storage == nil {
+			return nil, ErrStorageDisabled("Storage not configured for this app")
+		}
+
+		// Parse multipart form (max 32MB)
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			return nil, ErrBadRequest("INVALID_FORM", "Failed to parse multipart form")
+		}
+
+		// Get file from form
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			return nil, ErrBadRequest("MISSING_FILE", "No file provided")
+		}
+		defer file.Close()
+
+		// Upload file using storage package
+		uploadedFile, err := deps.Storage.Upload(r.Context(), rc.AppName, header.Filename, false, file)
+		if err != nil {
+			return nil, ErrInternal("Failed to upload file")
+		}
+
+		// Return file descriptor
+		return map[string]any{
+			"id":     uploadedFile.ID,
+			"name":   uploadedFile.Filename,
+			"size":   uploadedFile.Size,
+			"secure": uploadedFile.Secure,
+		}, nil
+	}
+}
+
+// File delete handler
+func handleFileDelete(deps *Deps) Handler {
+	return func(r *http.Request, rc *RequestContext) (any, error) {
+		// Check if storage is configured for this app
+		if deps.Storage == nil {
+			return nil, ErrStorageDisabled("Storage not configured for this app")
+		}
+
+		// Get file ID from URL
+		fileId := chi.URLParam(r, "fileId")
+		if fileId == "" {
+			return nil, ErrBadRequest("MISSING_FILE_ID", "File ID is required")
+		}
+
+		// Delete file using storage package
+		err := deps.Storage.Delete(r.Context(), rc.AppName, fileId)
+		if err != nil {
+			return nil, ErrNotFound("File not found")
+		}
+
+		return nil, nil // No content on successful delete
+	}
+}
