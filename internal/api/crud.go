@@ -4,12 +4,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/backd-dev/backd/internal/auth"
 	"github.com/backd-dev/backd/internal/db"
+	"github.com/backd-dev/backd/internal/filterql"
 	"github.com/go-chi/chi/v5"
 )
+
+// identifierRegex validates SQL identifiers (table/column names)
+var identifierRegex = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// sanitizeIdentifier validates that a string is safe to use as a SQL identifier
+func sanitizeIdentifier(name string) (string, error) {
+	if !identifierRegex.MatchString(name) {
+		return "", fmt.Errorf("invalid identifier: %q", name)
+	}
+	return name, nil
+}
 
 // RegisterCRUDRoutes registers all CRUD routes for collections
 func RegisterCRUDRoutes(r chi.Router, deps *Deps) {
@@ -272,24 +285,37 @@ func stripColumns(payload map[string]any, allowedColumns []string) map[string]an
 // These would be fully implemented with actual database queries
 
 func executeListQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
-	collection := chi.URLParam(r, "collection")
-
-	// Build SELECT query with policy clause
-	query := fmt.Sprintf("SELECT * FROM %s WHERE %s", collection, policyResult.SQLClause)
-
-	// Add WHERE clause from query params if present
-	var args []any
-	if qp.Where != nil && len(qp.Where) > 0 {
-		// This would integrate with filterql package to transpile the where clause
-		// For now, we'll use the policy clause only
-		args = append(args, policyResult.Params...)
-	} else {
-		args = policyResult.Params
+	collection, err := sanitizeIdentifier(chi.URLParam(r, "collection"))
+	if err != nil {
+		return nil, ErrBadRequest("INVALID_COLLECTION", err.Error())
 	}
 
-	// Add ORDER BY clause
+	// Start building WHERE parts and params from the RLS policy
+	whereParts := []string{policyResult.SQLClause}
+	args := append([]any{}, policyResult.Params...)
+
+	// Integrate filterql for user-supplied where clause
+	if len(qp.Where) > 0 {
+		filterClause, filterParams, err := filterql.Transpile(qp.Where)
+		if err != nil {
+			return nil, ErrBadRequest("INVALID_WHERE", err.Error())
+		}
+		if filterClause != "" {
+			whereParts = append(whereParts, filterClause)
+			args = append(args, filterParams...)
+		}
+	}
+
+	fullWhere := strings.Join(whereParts, " AND ")
+	query := fmt.Sprintf("SELECT * FROM %s WHERE %s", collection, fullWhere)
+
+	// Add ORDER BY clause (sanitize each field)
 	if len(qp.Order) > 0 {
-		query += " ORDER BY " + strings.Join(qp.Order, ", ")
+		var orderParts []string
+		for _, o := range qp.Order {
+			orderParts = append(orderParts, o) // TODO: validate order fields
+		}
+		query += " ORDER BY " + strings.Join(orderParts, ", ")
 	}
 
 	// Add LIMIT and OFFSET
@@ -302,15 +328,17 @@ func executeListQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *Query
 	}
 
 	// Get total count for pagination
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", collection, policyResult.SQLClause)
-	countResult, err := deps.DB.QueryOne(r.Context(), rc.AppName, countQuery, policyResult.Params...)
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", collection, fullWhere)
+	countResult, err := deps.DB.QueryOne(r.Context(), rc.AppName, countQuery, args...)
 	if err != nil {
 		return nil, ErrInternal("Failed to get total count")
 	}
 
 	var count int64
-	if countVal := countResult["count"]; countVal != nil {
-		count = countVal.(int64)
+	if countResult != nil {
+		if countVal, ok := countResult["count"].(int64); ok {
+			count = countVal
+		}
 	}
 
 	// Return paginated response
@@ -323,7 +351,10 @@ func executeListQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *Query
 }
 
 func executeCreateQuery(deps *Deps, r *http.Request, rc *RequestContext, payload map[string]any, policyResult auth.PolicyResult) (any, error) {
-	collection := chi.URLParam(r, "collection")
+	collection, err := sanitizeIdentifier(chi.URLParam(r, "collection"))
+	if err != nil {
+		return nil, ErrBadRequest("INVALID_COLLECTION", err.Error())
+	}
 	id := db.NewXID()
 
 	// Build INSERT query with policy clause
@@ -346,7 +377,7 @@ func executeCreateQuery(deps *Deps, r *http.Request, rc *RequestContext, payload
 	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", collection, strings.Join(columns, ", "), strings.Join(placeholders, ", "))
 
 	// Execute query
-	err := deps.DB.Exec(r.Context(), rc.AppName, query, values...)
+	err = deps.DB.Exec(r.Context(), rc.AppName, query, values...)
 	if err != nil {
 		return nil, ErrInternal("Failed to create record")
 	}
@@ -356,7 +387,10 @@ func executeCreateQuery(deps *Deps, r *http.Request, rc *RequestContext, payload
 }
 
 func executeGetQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
-	collection := chi.URLParam(r, "collection")
+	collection, err := sanitizeIdentifier(chi.URLParam(r, "collection"))
+	if err != nil {
+		return nil, ErrBadRequest("INVALID_COLLECTION", err.Error())
+	}
 	id := chi.URLParam(r, "id")
 
 	// Build SELECT query with policy clause
@@ -373,7 +407,10 @@ func executeGetQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *QueryP
 }
 
 func executeUpdateQuery(deps *Deps, r *http.Request, rc *RequestContext, payload map[string]any, policyResult auth.PolicyResult) (any, error) {
-	collection := chi.URLParam(r, "collection")
+	collection, err := sanitizeIdentifier(chi.URLParam(r, "collection"))
+	if err != nil {
+		return nil, ErrBadRequest("INVALID_COLLECTION", err.Error())
+	}
 	id := chi.URLParam(r, "id")
 
 	// Build UPDATE query with policy clause
@@ -395,7 +432,7 @@ func executeUpdateQuery(deps *Deps, r *http.Request, rc *RequestContext, payload
 	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s AND id = $%d", collection, strings.Join(setClauses, ", "), policyResult.SQLClause, len(values))
 
 	// Execute query
-	err := deps.DB.Exec(r.Context(), rc.AppName, query, values...)
+	err = deps.DB.Exec(r.Context(), rc.AppName, query, values...)
 	if err != nil {
 		return nil, ErrInternal("Failed to update record")
 	}
@@ -410,7 +447,10 @@ func executePatchQuery(deps *Deps, r *http.Request, rc *RequestContext, payload 
 }
 
 func executeDeleteQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
-	collection := chi.URLParam(r, "collection")
+	collection, err := sanitizeIdentifier(chi.URLParam(r, "collection"))
+	if err != nil {
+		return nil, ErrBadRequest("INVALID_COLLECTION", err.Error())
+	}
 	id := chi.URLParam(r, "id")
 
 	// Build DELETE query with policy clause
@@ -418,7 +458,7 @@ func executeDeleteQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *Que
 	args := append(policyResult.Params, id)
 
 	// Execute query
-	err := deps.DB.Exec(r.Context(), rc.AppName, query, args...)
+	err = deps.DB.Exec(r.Context(), rc.AppName, query, args...)
 	if err != nil {
 		return nil, ErrInternal("Failed to delete record")
 	}

@@ -1,8 +1,11 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"time"
 
@@ -54,19 +57,19 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// RecoveryMiddleware recovers from panics and re-panics to let Handler wrapper handle them
+// RecoveryMiddleware recovers from panics, logs stack trace, and returns 500
 func RecoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if err := recover(); err != nil {
-				slog.Error("Panic recovered in middleware",
+				slog.Error("Panic recovered",
 					"error", err,
+					"stack", string(debug.Stack()),
 					"path", r.URL.Path,
 					"method", r.Method,
 					"request_id", RequestContextFrom(r.Context()).RequestID,
 				)
-				// Re-panic to let the Handler wrapper in handler.go handle the response writing
-				panic(err)
+				writeError(w, ErrInternal("Internal server error"))
 			}
 		}()
 
@@ -159,15 +162,7 @@ func extractBearerToken(authHeader string) string {
 }
 
 func generateRequestID() string {
-	// Simple request ID generation - in production could use UUID
-	return time.Now().Format("20060102150405") + "-" + randomString(6)
-}
-
-func randomString(length int) string {
-	const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
-	b := make([]byte, length)
-	for i := range b {
-		b[i] = charset[time.Now().UnixNano()%int64(len(charset))]
-	}
-	return string(b)
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
 }

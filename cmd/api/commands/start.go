@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -37,27 +38,6 @@ func (a *dbSecretsAdapter) GenerateKey() ([]byte, error) {
 		return nil, fmt.Errorf("failed to generate random key: %w", err)
 	}
 	return key, nil
-}
-
-// authDBAdapter adapts db.DB to auth.DB interface
-type authDBAdapter struct {
-	db db.DB
-}
-
-func (a *authDBAdapter) Exec(ctx context.Context, app, query string, args ...any) error {
-	return a.db.Exec(ctx, app, query, args...)
-}
-
-func (a *authDBAdapter) Query(ctx context.Context, app, query string, args ...any) ([]map[string]any, error) {
-	return a.db.Query(ctx, app, query, args...)
-}
-
-func (a *authDBAdapter) QueryOne(ctx context.Context, app, query string, args ...any) (map[string]any, error) {
-	return a.db.QueryOne(ctx, app, query, args...)
-}
-
-func (a *authDBAdapter) Pool(name string) (interface{}, error) {
-	return a.db.Pool(name)
 }
 
 // StartFunc is the command function for the start command
@@ -117,13 +97,23 @@ var StartFunc func(ctx *commandkit.CommandContext) error = func(ctx *commandkit.
 
 	// Derive domain keys
 	for domainName := range configSet.Domains {
-		domainKeys[domainName] = secrets.DeriveDomainKey(masterKey, domainName)
+		key, err := secrets.DeriveDomainKey(masterKey, domainName)
+		if err != nil {
+			slog.Error("failed to derive domain key", "domain", domainName, "error", err)
+			os.Exit(1)
+		}
+		domainKeys[domainName] = key
 		slog.Debug("derived domain key", "domain", domainName)
 	}
 
 	// Derive app keys
 	for appName := range configSet.Apps {
-		appKeys[appName] = secrets.DeriveAppKey(masterKey, appName)
+		key, err := secrets.DeriveAppKey(masterKey, appName)
+		if err != nil {
+			slog.Error("failed to derive app key", "app", appName, "error", err)
+			os.Exit(1)
+		}
+		appKeys[appName] = key
 		slog.Debug("derived app key", "app", appName)
 	}
 
@@ -180,7 +170,7 @@ var StartFunc func(ctx *commandkit.CommandContext) error = func(ctx *commandkit.
 	}
 
 	// Phase 7: Start services
-	return startServices(serverCfg, configSet, appStatus, mode)
+	return startServices(serverCfg, configSet, dbInstance, secretsInstance, celqlInstance, appStatus, mode)
 }
 
 func provisionDomain(ctx context.Context, dbInstance db.DB, secretsInstance secrets.Secrets, dbSecrets db.Secrets, domainName string) error {
@@ -242,18 +232,8 @@ func provisionApp(ctx context.Context, dbInstance db.DB, secretsInstance secrets
 	return "ready", nil
 }
 
-func startServices(serverCfg *config.ServerConfig, configSet *config.ConfigSet, appStatus map[string]string, mode string) error {
-	// Create dependencies for API
-	celqlInstance, err := celql.New()
-	if err != nil {
-		return fmt.Errorf("failed to create CELQL instance: %w", err)
-	}
-
-	// Re-create instances with proper dependencies for API
-	dbInstance := db.NewDB(configSet, serverCfg)
-	secretsInstance := secrets.NewSecrets(dbInstance, []byte(serverCfg.EncryptionKey))
-	authDBAdapter := &authDBAdapter{db: dbInstance}
-	authInstance := auth.NewAuth(authDBAdapter, celqlInstance)
+func startServices(serverCfg *config.ServerConfig, configSet *config.ConfigSet, dbInstance db.DB, secretsInstance secrets.Secrets, celqlInstance celql.CELQL, appStatus map[string]string, mode string) error {
+	authInstance := auth.NewAuth(dbInstance, celqlInstance)
 	functionsClient := functions.NewHTTPClient(serverCfg.FunctionsURL)
 
 	// Create metrics instance
@@ -368,7 +348,16 @@ func startServices(serverCfg *config.ServerConfig, configSet *config.ConfigSet, 
 		if len(appStatus) > 0 {
 			jsonStr = jsonStr[:len(jsonStr)-1] // Remove trailing comma
 		}
-		jsonStr += `},"domains":{"company":{"status":"ready"}}}`
+		jsonStr += `},"domains":{`
+		first := true
+		for domainName := range configSet.Domains {
+			if !first {
+				jsonStr += ","
+			}
+			jsonStr += fmt.Sprintf(`"%s":{"status":"ready"}`, domainName)
+			first = false
+		}
+		jsonStr += `}}`
 
 		fmt.Fprint(w, jsonStr)
 	})
@@ -442,10 +431,17 @@ func loadRLSPolicies(ctx context.Context, dbInstance db.DB, appName string, appC
 				query := `
 					INSERT INTO _policies (table_name, operation, expression, check_expr, columns, defaults, soft_delete)
 					VALUES ($1, $2, $3, $4, $5, $6, $7)
+					ON CONFLICT (table_name, operation) DO UPDATE SET
+						expression = EXCLUDED.expression,
+						check_expr = EXCLUDED.check_expr,
+						columns = EXCLUDED.columns,
+						defaults = EXCLUDED.defaults,
+						soft_delete = EXCLUDED.soft_delete
 				`
+				defaultsJSON, _ := json.Marshal(policy.Defaults)
 				err := dbInstance.Exec(ctx, appName, query,
 					tableName, operation, policy.Expression, policy.Check,
-					policy.Columns, policy.Defaults, policy.Soft,
+					policy.Columns, string(defaultsJSON), policy.Soft,
 				)
 				if err != nil {
 					return fmt.Errorf("failed to insert policy for %s.%s: %w", tableName, operation, err)

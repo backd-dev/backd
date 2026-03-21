@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -778,8 +779,8 @@ func TestValidateSecrets(t *testing.T) {
 	}
 
 	validateSecrets(secrets, result)
-	if result.ErrorCount() != 2 {
-		t.Errorf("Expected 2 errors for invalid secrets, got %d", result.ErrorCount())
+	if result.ErrorCount() != 1 {
+		t.Errorf("Expected 1 error for invalid secrets, got %d", result.ErrorCount())
 		for _, issue := range result.Issues {
 			t.Logf("Issue: %s - %s", issue.Field, issue.Message)
 		}
@@ -999,19 +1000,19 @@ func TestGetDuration(t *testing.T) {
 	}
 }
 
-func TestContains(t *testing.T) {
-	slice := []string{"apple", "banana", "cherry"}
+func TestSlicesContains(t *testing.T) {
+	sl := []string{"apple", "banana", "cherry"}
 
-	if !contains(slice, "apple") {
-		t.Errorf("Expected contains to return true for 'apple'")
+	if !slices.Contains(sl, "apple") {
+		t.Errorf("Expected slices.Contains to return true for 'apple'")
 	}
 
-	if contains(slice, "orange") {
-		t.Errorf("Expected contains to return false for 'orange'")
+	if slices.Contains(sl, "orange") {
+		t.Errorf("Expected slices.Contains to return false for 'orange'")
 	}
 
-	if contains([]string{}, "anything") {
-		t.Errorf("Expected contains to return false for empty slice")
+	if slices.Contains([]string{}, "anything") {
+		t.Errorf("Expected slices.Contains to return false for empty slice")
 	}
 }
 

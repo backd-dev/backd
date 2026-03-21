@@ -14,36 +14,21 @@ func (a *authImpl) ValidateKey(ctx context.Context, appName, key string) (KeyTyp
 		return "", fmt.Errorf("key cannot be empty")
 	}
 
-	// Check for secret key first (internal use)
-	secretQuery := `
-		SELECT id FROM _api_keys 
-		WHERE app_name = $1 AND key_hash = crypt($2, key_hash) AND type = 'secret'`
-
-	secretRow, err := a.db.QueryOne(ctx, appName, secretQuery, appName, key)
+	// Query all keys for the app and compare
+	query := `SELECT id, type, key_hash FROM _api_keys WHERE app_name = $1`
+	rows, err := a.db.Query(ctx, appName, query, appName)
 	if err != nil {
-		slog.Error("failed to validate secret key", "app", appName, "error", err)
+		slog.Error("failed to query api keys", "app", appName, "error", err)
 		return "", fmt.Errorf("auth.ValidateKey: %w", err)
 	}
 
-	if secretRow != nil {
-		slog.Debug("secret key validated", "app", appName)
-		return KeyTypeSecret, nil
-	}
-
-	// Check for publishable key
-	publishableQuery := `
-		SELECT id FROM _api_keys 
-		WHERE app_name = $1 AND key_hash = crypt($2, key_hash) AND type = 'publishable'`
-
-	publishableRow, err := a.db.QueryOne(ctx, appName, publishableQuery, appName, key)
-	if err != nil {
-		slog.Error("failed to validate publishable key", "app", appName, "error", err)
-		return "", fmt.Errorf("auth.ValidateKey: %w", err)
-	}
-
-	if publishableRow != nil {
-		slog.Debug("publishable key validated", "app", appName)
-		return KeyTypePublishable, nil
+	for _, row := range rows {
+		storedHash, _ := row["key_hash"].(string)
+		keyType, _ := row["type"].(string)
+		if storedHash == key {
+			slog.Debug("api key validated", "app", appName, "type", keyType)
+			return KeyType(keyType), nil
+		}
 	}
 
 	slog.Info("invalid API key", "app", appName)
@@ -68,7 +53,7 @@ func (a *authImpl) UpsertPublishableKey(ctx context.Context, appName, key string
 		// Update existing key
 		updateQuery := `
 			UPDATE _api_keys 
-			SET key_hash = crypt($1, gen_salt('bf')), updated_at = NOW()
+			SET key_hash = $1, updated_at = NOW()
 			WHERE app_name = $2 AND type = 'publishable'`
 
 		err = a.db.Exec(ctx, appName, updateQuery, key, appName)
@@ -82,7 +67,7 @@ func (a *authImpl) UpsertPublishableKey(ctx context.Context, appName, key string
 		// Insert new key
 		insertQuery := `
 			INSERT INTO _api_keys (id, app_name, key_hash, type, created_at, updated_at)
-			VALUES ($1, $2, crypt($3, gen_salt('bf')), 'publishable', NOW(), NOW())`
+			VALUES ($1, $2, $3, 'publishable', NOW(), NOW())`
 
 		keyID := db.NewXID()
 		err = a.db.Exec(ctx, appName, insertQuery, keyID, appName, key)
@@ -105,7 +90,7 @@ func (a *authImpl) VerifyPublishableKey(ctx context.Context, appName, key string
 
 	query := `
 		SELECT id FROM _api_keys 
-		WHERE app_name = $1 AND key_hash = crypt($2, key_hash) AND type = 'publishable'`
+		WHERE app_name = $1 AND key_hash = $2 AND type = 'publishable'`
 
 	row, err := a.db.QueryOne(ctx, appName, query, appName, key)
 	if err != nil {

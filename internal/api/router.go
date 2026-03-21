@@ -1,6 +1,7 @@
 package api
 
 import (
+	"github.com/backd-dev/backd/internal/metrics"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -11,11 +12,11 @@ func NewRouter(deps *Deps) chi.Router {
 
 	// Apply middleware in the correct order
 	r.Use(
-		middleware.RequestID, // chi built-in: X-Request-ID header
-		RequestIDMiddleware,  // store in RequestContext
-		LoggingMiddleware,    // slog on completion
-		RecoveryMiddleware,   // panic → 500 + stack trace
-		// metrics.RequestMiddleware, // Prometheus counters (will be added in milestone 11)
+		middleware.RequestID,      // chi built-in: X-Request-ID header
+		RequestIDMiddleware,       // store in RequestContext
+		LoggingMiddleware,         // slog on completion
+		RecoveryMiddleware,        // panic → 500 + stack trace
+		metrics.RequestMiddleware, // Prometheus counters
 		AuthMiddleware(deps.Auth), // session/key → RequestContext
 	)
 

@@ -19,19 +19,21 @@ const (
 	)`
 
 	createUsersTable = `CREATE TABLE IF NOT EXISTS _users (
-		_id TEXT PRIMARY KEY,
+		id TEXT PRIMARY KEY,
 		username TEXT UNIQUE NOT NULL,
 		password_hash TEXT NOT NULL,
 		email TEXT,
 		type TEXT DEFAULT 'user',
+		metadata JSONB DEFAULT '{}',
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)`
 
 	createSessionsTable = `CREATE TABLE IF NOT EXISTS _sessions (
-		_id TEXT PRIMARY KEY,
-		user_id TEXT NOT NULL REFERENCES _users(_id) ON DELETE CASCADE,
-		token_hash TEXT UNIQUE NOT NULL,
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL REFERENCES _users(id) ON DELETE CASCADE,
+		app_name TEXT NOT NULL,
+		token TEXT UNIQUE NOT NULL,
 		expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 		meta JSONB DEFAULT '{}',
@@ -46,65 +48,69 @@ const (
 	)`
 
 	createApiKeysTable = `CREATE TABLE IF NOT EXISTS _api_keys (
-		_id TEXT PRIMARY KEY,
-		name TEXT NOT NULL,
-		publishable_key TEXT UNIQUE NOT NULL,
-		secret_key_encrypted TEXT NOT NULL,
+		id TEXT PRIMARY KEY,
+		app_name TEXT NOT NULL,
+		key_hash TEXT NOT NULL,
+		type TEXT NOT NULL DEFAULT 'publishable',
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)`
 
 	createPoliciesTable = `CREATE TABLE IF NOT EXISTS _policies (
 		table_name TEXT NOT NULL,
-		policy_name TEXT NOT NULL,
+		operation TEXT NOT NULL,
 		expression TEXT NOT NULL,
-		check_expression TEXT,
-		allowed_columns TEXT[],
+		check_expr TEXT,
+		columns TEXT[],
 		defaults JSONB DEFAULT '{}',
-		soft_delete_column TEXT,
-		PRIMARY KEY (table_name, policy_name)
+		soft_delete TEXT,
+		PRIMARY KEY (table_name, operation)
 	)`
 
 	createFilesTable = `CREATE TABLE IF NOT EXISTS _files (
-		_id TEXT PRIMARY KEY,
+		id TEXT PRIMARY KEY,
 		filename TEXT NOT NULL,
 		content_type TEXT,
 		size_bytes BIGINT,
 		storage_key TEXT NOT NULL,
+		bucket TEXT,
 		secure BOOLEAN DEFAULT false,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)`
 
 	createJobsTable = `CREATE TABLE IF NOT EXISTS _jobs (
-		_id TEXT PRIMARY KEY,
+		id TEXT PRIMARY KEY,
+		app_name TEXT NOT NULL,
 		function TEXT NOT NULL,
 		payload JSONB DEFAULT '{}',
+		trigger TEXT DEFAULT 'manual',
 		status TEXT DEFAULT 'pending',
 		attempts INTEGER DEFAULT 0,
 		max_attempts INTEGER DEFAULT 3,
-		scheduled_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+		run_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 		started_at TIMESTAMP WITH TIME ZONE,
 		completed_at TIMESTAMP WITH TIME ZONE,
-		error_message TEXT,
+		error TEXT,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 	)`
 
 	createSecretAuditTable = `CREATE TABLE IF NOT EXISTS _secret_audit (
-		_id TEXT PRIMARY KEY,
+		id TEXT PRIMARY KEY,
 		secret_name TEXT NOT NULL,
 		action TEXT NOT NULL,
+		app_name TEXT,
 		accessed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 		context JSONB DEFAULT '{}'
 	)`
 
-	// Domain tables (same as app but with extra app_name column in sessions)
+	// Domain tables — sessions have app_name for cross-app session scoping
 	createDomainSessionsTable = `CREATE TABLE IF NOT EXISTS _sessions (
-		_id TEXT PRIMARY KEY,
-		user_id TEXT NOT NULL REFERENCES _users(_id) ON DELETE CASCADE,
+		id TEXT PRIMARY KEY,
+		user_id TEXT NOT NULL REFERENCES _users(id) ON DELETE CASCADE,
 		app_name TEXT NOT NULL,
-		token_hash TEXT UNIQUE NOT NULL,
+		token TEXT UNIQUE NOT NULL,
 		expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 		meta JSONB DEFAULT '{}',

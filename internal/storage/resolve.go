@@ -43,8 +43,8 @@ func (s *storageImpl) ResolveFiles(ctx context.Context, appName string, rows []m
 	slog.Info("found file references", "unique_files", len(fileIDs), "total_refs", len(fileIDToRows))
 
 	// Step 2: Single query to get all file records
-	query := `SELECT _id, filename, content_type, size_bytes, secure, storage_key, bucket, created_at 
-	          FROM _files WHERE _id = ANY($1)`
+	query := `SELECT id, filename, content_type, size_bytes, secure, storage_key, bucket, created_at 
+	          FROM _files WHERE id = ANY($1)`
 
 	fileRecords, err := s.db.Query(ctx, appName, query, fileIDs)
 	if err != nil {
@@ -54,7 +54,7 @@ func (s *storageImpl) ResolveFiles(ctx context.Context, appName string, rows []m
 	// Step 3: Build lookup map and generate URLs
 	fileLookup := make(map[string]*FileDescriptor)
 	for _, record := range fileRecords {
-		fileID, ok := record["_id"].(string)
+		fileID, ok := record["id"].(string)
 		if !ok {
 			continue
 		}
@@ -93,8 +93,15 @@ func (s *storageImpl) ResolveFiles(ctx context.Context, appName string, rows []m
 	}
 
 	// Step 4: Replace UUID values in rows with FileDescriptor objects
+	// Deep copy each row map to avoid modifying the original
 	result := make([]map[string]any, len(rows))
-	copy(result, rows) // Deep copy to avoid modifying original
+	for i, row := range rows {
+		rowCopy := make(map[string]any, len(row))
+		for k, v := range row {
+			rowCopy[k] = v
+		}
+		result[i] = rowCopy
+	}
 
 	for fileID, refs := range fileIDToRows {
 		fileDesc, exists := fileLookup[fileID]

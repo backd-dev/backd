@@ -104,23 +104,15 @@ type Auth interface {
 
 // authImpl implements the Auth interface
 type authImpl struct {
-	db    DB
+	db    db.DB
 	celql celql.CELQL
 	cache *PolicyCache
 }
 
-// DB interface defines database operations needed by auth package
-type DB interface {
-	Exec(ctx context.Context, app, query string, args ...any) error
-	Query(ctx context.Context, app, query string, args ...any) ([]map[string]any, error)
-	QueryOne(ctx context.Context, app, query string, args ...any) (map[string]any, error)
-	Pool(name string) (interface{}, error)
-}
-
 // NewAuth creates a new Auth instance
-func NewAuth(db DB, celql celql.CELQL) Auth {
+func NewAuth(database db.DB, celql celql.CELQL) Auth {
 	return &authImpl{
-		db:    db,
+		db:    database,
 		celql: celql,
 		cache: &PolicyCache{
 			programs: make(map[policyKey]*cel.Ast),
@@ -158,8 +150,8 @@ func (a *authImpl) Register(ctx context.Context, appName, username, password str
 	// Create user
 	userID := db.NewXID()
 	insertQuery := `
-		INSERT INTO _users (id, username, type, password_hash, metadata, created_at, updated_at)
-		VALUES ($1, $2, 'local', $3, '{}', NOW(), NOW())`
+		INSERT INTO _users (id, username, password_hash, type, metadata, created_at, updated_at)
+		VALUES ($1, $2, $3, 'user', '{}', NOW(), NOW())`
 
 	err = a.db.Exec(ctx, appName, insertQuery, userID, username, passwordHash)
 	if err != nil {
@@ -170,7 +162,7 @@ func (a *authImpl) Register(ctx context.Context, appName, username, password str
 	user := &User{
 		ID:        userID,
 		Username:  username,
-		Type:      "local",
+		Type:      "user",
 		Metadata:  make(map[string]any),
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
@@ -187,7 +179,7 @@ func (a *authImpl) UpdateUsername(ctx context.Context, appName, userID, username
 	}
 
 	// Check if username is already taken by another user
-	checkQuery := `SELECT id FROM _users WHERE username = $1 AND id != $2`
+	checkQuery := `SELECT id FROM _users WHERE username = $1 AND id <> $2`
 	existing, err := a.db.QueryOne(ctx, appName, checkQuery, username, userID)
 	if err != nil {
 		slog.Error("failed to check username availability", "app", appName, "username", username, "error", err)

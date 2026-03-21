@@ -68,7 +68,8 @@ func (db *dbImpl) Query(ctx context.Context, appName, query string, args ...any)
 	return results, nil
 }
 
-// QueryOne executes a query that returns a single row
+// QueryOne executes a query that returns a single row.
+// Returns (nil, nil) when no rows are found — callers check row == nil.
 func (db *dbImpl) QueryOne(ctx context.Context, appName, query string, args ...any) (map[string]any, error) {
 	results, err := db.Query(ctx, appName, query, args...)
 	if err != nil {
@@ -76,11 +77,7 @@ func (db *dbImpl) QueryOne(ctx context.Context, appName, query string, args ...a
 	}
 
 	if len(results) == 0 {
-		return nil, fmt.Errorf("no rows returned")
-	}
-
-	if len(results) > 1 {
-		return nil, fmt.Errorf("expected 1 row, got %d", len(results))
+		return nil, nil
 	}
 
 	return results[0], nil

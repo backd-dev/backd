@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/backd-dev/backd/internal/config"
@@ -75,5 +76,5 @@ func generateS3Key(appName, fileID, filename string) string {
 
 // Helper function to detect __file columns
 func isFileColumn(colName string) bool {
-	return len(colName) >= 6 && colName[len(colName)-6:] == "__file"
+	return strings.HasSuffix(colName, "__file")
 }

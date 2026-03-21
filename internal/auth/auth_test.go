@@ -6,7 +6,9 @@ import (
 
 	"github.com/backd-dev/backd/internal/celql"
 	"github.com/backd-dev/backd/internal/config"
+	"github.com/backd-dev/backd/internal/db"
 	"github.com/google/cel-go/cel"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // mockDB implements the DB interface for testing
@@ -35,8 +37,36 @@ func (m *mockDB) QueryOne(ctx context.Context, app, query string, args ...any) (
 	return nil, nil
 }
 
-func (m *mockDB) Pool(name string) (interface{}, error) {
+func (m *mockDB) Pool(name string) (*pgxpool.Pool, error) {
 	return nil, nil
+}
+
+func (m *mockDB) Provision(ctx context.Context, name string, dbType db.DBType) error {
+	return nil
+}
+
+func (m *mockDB) Bootstrap(ctx context.Context, name string, dbType db.DBType) error {
+	return nil
+}
+
+func (m *mockDB) Migrate(ctx context.Context, appName, migrationsPath string) error {
+	return nil
+}
+
+func (m *mockDB) Tables(ctx context.Context, appName string) ([]db.TableInfo, error) {
+	return nil, nil
+}
+
+func (m *mockDB) Columns(ctx context.Context, appName, table string) ([]db.ColumnInfo, error) {
+	return nil, nil
+}
+
+func (m *mockDB) VerifyPublishableKey(ctx context.Context, appName, key string) error {
+	return nil
+}
+
+func (m *mockDB) EnsureSecretKey(ctx context.Context, appName string, s db.Secrets) error {
+	return nil
 }
 
 // mockCELQL implements the CELQL interface for testing

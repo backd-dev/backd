@@ -9,7 +9,6 @@ import (
 
 	"github.com/backd-dev/backd/internal/celql"
 	"github.com/backd-dev/backd/internal/config"
-	"github.com/backd-dev/backd/internal/db"
 )
 
 // LoadPolicies loads and caches RLS policies for an app
@@ -21,9 +20,9 @@ func (a *authImpl) LoadPolicies(ctx context.Context, appName string, cfg *config
 	// Clear existing cache for this app
 	a.clearAppCache(appName)
 
-	// Delete existing policies from database
-	deleteQuery := `DELETE FROM _policies WHERE app_name = $1`
-	err := a.db.Exec(ctx, appName, deleteQuery, appName)
+	// Delete existing policies from database (full replace per app)
+	deleteQuery := `DELETE FROM _policies`
+	err := a.db.Exec(ctx, appName, deleteQuery)
 	if err != nil {
 		slog.Error("failed to delete existing policies", "app", appName, "error", err)
 		return fmt.Errorf("auth.LoadPolicies: %w", err)
@@ -50,19 +49,23 @@ func (a *authImpl) LoadPolicies(ctx context.Context, appName string, cfg *config
 			a.cache.programs[key] = ast
 			a.cache.policies[key] = &policyEntry
 
-			// Insert into database
+			// Insert into database — matches DDL: (table_name, operation, expression, check_expr, columns, defaults, soft_delete)
 			insertQuery := `
-				INSERT INTO _policies (id, app_name, table_name, operation, expression, check_expr, columns, defaults, soft_delete, created_at)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`
+				INSERT INTO _policies (table_name, operation, expression, check_expr, columns, defaults, soft_delete)
+				VALUES ($1, $2, $3, $4, $5, $6, $7)
+				ON CONFLICT (table_name, operation) DO UPDATE SET
+					expression = EXCLUDED.expression,
+					check_expr = EXCLUDED.check_expr,
+					columns = EXCLUDED.columns,
+					defaults = EXCLUDED.defaults,
+					soft_delete = EXCLUDED.soft_delete`
 
-			policyID := db.NewXID()
-			columnsJSON, _ := json.Marshal(policyEntry.Columns)
 			defaultsJSON, _ := json.Marshal(policyEntry.Defaults)
 
 			err = a.db.Exec(ctx, appName, insertQuery,
-				policyID, appName, tableName, operation,
+				tableName, operation,
 				policyEntry.Expression, policyEntry.Check,
-				string(columnsJSON), string(defaultsJSON), policyEntry.Soft)
+				policyEntry.Columns, string(defaultsJSON), policyEntry.Soft)
 			if err != nil {
 				slog.Error("failed to insert policy", "app", appName, "table", tableName, "operation", operation, "error", err)
 				return fmt.Errorf("auth.LoadPolicies: %w", err)
@@ -118,6 +121,7 @@ func (a *authImpl) EvaluatePolicy(ctx context.Context, appName, table, operation
 		SQLClause: result.SQL,
 		Params:    result.Params,
 		Defaults:  policy.Defaults,
+		Columns:   policy.Columns,
 		SoftCol:   policy.Soft,
 	}
 

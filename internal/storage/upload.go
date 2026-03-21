@@ -14,24 +14,22 @@ import (
 	"github.com/backd-dev/backd/internal/db"
 )
 
-// detectContentType detects the MIME type of a file
-func detectContentType(filename string, body io.Reader) string {
-	// Try to detect from the first 512 bytes
+// detectContentType detects the MIME type from the first bytes and returns
+// both the detected type and a new reader that replays those bytes.
+func detectContentType(body io.Reader) (string, io.Reader) {
 	buffer := make([]byte, 512)
 	n, err := body.Read(buffer)
-	if err != nil {
-		// If we can't read, fall back to a default
-		return "application/octet-stream"
+	if err != nil || n == 0 {
+		return "application/octet-stream", body
 	}
 
-	// Create a new reader that includes the buffer and the rest
-	body = io.MultiReader(
+	contentType := http.DetectContentType(buffer[:n])
+	// Reassemble: prepend the sniffed bytes back onto the stream
+	reassembled := io.MultiReader(
 		strings.NewReader(string(buffer[:n])),
 		body,
 	)
-
-	contentType := http.DetectContentType(buffer[:n])
-	return contentType
+	return contentType, reassembled
 }
 
 // Upload streams a file to S3 and creates a database record
@@ -58,8 +56,8 @@ func (s *storageImpl) Upload(ctx context.Context, appName, filename string, secu
 	// Generate S3 key
 	s3Key := generateS3Key(appName, fileID, filename)
 
-	// Detect content type
-	contentType := detectContentType(filename, body)
+	// Detect content type — also returns a new reader with sniffed bytes prepended
+	contentType, body := detectContentType(body)
 
 	// Upload to S3
 	slog.Info("uploading to S3", "key", s3Key, "bucket", appCfg.Storage.Bucket)
@@ -101,11 +99,11 @@ func (s *storageImpl) Upload(ctx context.Context, appName, filename string, secu
 		CreatedAt: now,
 	}
 
-	// Insert into database
+	// Insert into database — matches unified DDL with 'id' and 'bucket'
 	err = s.db.Exec(ctx, appName, `
-		INSERT INTO _files (_id, filename, content_type, size_bytes, storage_key, secure, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, fileID, filename, contentType, headResp.ContentLength, s3Key, secure, now, now)
+		INSERT INTO _files (id, filename, content_type, size_bytes, storage_key, bucket, secure, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, fileID, filename, contentType, headResp.ContentLength, s3Key, appCfg.Storage.Bucket, secure, now, now)
 	if err != nil {
 		// Try to delete from S3 on database failure
 		slog.Error("database insert failed, cleaning up S3", "error", err)
@@ -136,7 +134,7 @@ func (s *storageImpl) Delete(ctx context.Context, appName, fileID string) error 
 
 	// Get file record from database
 	fileRecord, err := s.db.QueryOne(ctx, appName, `
-		SELECT storage_key, bucket FROM _files WHERE _id = $1
+		SELECT storage_key FROM _files WHERE id = $1
 	`, fileID)
 	if err != nil {
 		return fmt.Errorf("failed to query file record: %w", err)
@@ -147,7 +145,7 @@ func (s *storageImpl) Delete(ctx context.Context, appName, fileID string) error 
 	}
 
 	storageKey, ok := fileRecord["storage_key"].(string)
-	if !ok {
+	if !ok || storageKey == "" {
 		return fmt.Errorf("invalid storage_key in database")
 	}
 
@@ -157,18 +155,16 @@ func (s *storageImpl) Delete(ctx context.Context, appName, fileID string) error 
 		return fmt.Errorf("failed to get S3 client: %w", err)
 	}
 
-	// Delete from S3
-	_, _ = client.DeleteObject(ctx, &s3.DeleteObjectInput{
+	// Delete from S3 (best effort — continue even on failure)
+	if _, delErr := client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(appCfg.Storage.Bucket),
 		Key:    aws.String(storageKey),
-	})
-	if err != nil {
-		slog.Error("failed to delete from S3", "error", err, "key", storageKey)
-		// Continue with database deletion even if S3 deletion fails
+	}); delErr != nil {
+		slog.Error("failed to delete from S3", "error", delErr, "key", storageKey)
 	}
 
 	// Delete from database
-	err = s.db.Exec(ctx, appName, `DELETE FROM _files WHERE _id = $1`, fileID)
+	err = s.db.Exec(ctx, appName, `DELETE FROM _files WHERE id = $1`, fileID)
 	if err != nil {
 		return fmt.Errorf("failed to delete file record: %w", err)
 	}

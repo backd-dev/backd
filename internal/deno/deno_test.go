@@ -313,9 +313,9 @@ func TestJobWorkerStruct(t *testing.T) {
 		ctx:  context.Background(),
 	}
 
-	// Test that the struct can be created
-	if worker == nil {
-		t.Error("Expected JobWorker to be created")
+	// Verify struct fields are set as expected
+	if worker.ctx == nil {
+		t.Error("Expected JobWorker context to be set")
 	}
 }
 

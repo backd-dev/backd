@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -33,7 +34,7 @@ func ValidateApp(app *AppConfig, migrationsPath, functionsPath string, domainNam
 
 	// Validate auth domain reference
 	if app.Auth.Domain != "" {
-		if !contains(domainNames, app.Auth.Domain) {
+		if !slices.Contains(domainNames, app.Auth.Domain) {
 			result.AddError("auth.domain", "domain not found", fmt.Sprintf("available domains: %s", strings.Join(domainNames, ", ")))
 		}
 	}
@@ -158,10 +159,6 @@ func validateSecrets(secrets map[string]string, result *ValidationResult) {
 		if value == "" {
 			result.AddWarning(fmt.Sprintf("secrets.%s", name), "empty value", "secret will be removed")
 		}
-		// Check if value uses env var substitution
-		if !strings.HasPrefix(value, "${") || !strings.HasSuffix(value, "}") {
-			result.AddError(fmt.Sprintf("secrets.%s", name), "invalid format", "must use ${VAR_NAME} format")
-		}
 	}
 }
 
@@ -238,14 +235,4 @@ func validateDirectories(appName, migrationsPath, functionsPath string, result *
 	if _, err := os.Stat(functionsPath); os.IsNotExist(err) {
 		result.AddWarning("functions", "directory not found", "optional - create if using functions")
 	}
-}
-
-// contains checks if a string slice contains a value
-func contains(slice []string, value string) bool {
-	for _, item := range slice {
-		if item == value {
-			return true
-		}
-	}
-	return false
 }

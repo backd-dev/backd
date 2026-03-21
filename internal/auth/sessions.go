@@ -22,7 +22,7 @@ func (a *authImpl) SignIn(ctx context.Context, appName, domainName, username, pa
 	query := `
 		SELECT id, username, password_hash, metadata, created_at, updated_at
 		FROM _users
-		WHERE username = $1 AND type = 'local'`
+		WHERE username = $1`
 
 	row, err := a.db.QueryOne(ctx, appName, query, username)
 	if err != nil {
@@ -42,9 +42,11 @@ func (a *authImpl) SignIn(ctx context.Context, appName, domainName, username, pa
 		return nil, fmt.Errorf("auth.SignIn: invalid credentials")
 	}
 
-	// Generate session token using db.NewXID
-	sessionToken := db.NewXID()
 	userID := row["id"].(string)
+
+	// Generate session ID and token
+	sessionID := db.NewXID()
+	sessionToken := db.NewXID()
 
 	// Calculate expiry time
 	expiresAt := time.Now().Add(24 * time.Hour) // TODO: get from config
@@ -54,14 +56,14 @@ func (a *authImpl) SignIn(ctx context.Context, appName, domainName, username, pa
 		INSERT INTO _sessions (id, user_id, app_name, token, created_at, expires_at)
 		VALUES ($1, $2, $3, $4, NOW(), $5)`
 
-	err = a.db.Exec(ctx, appName, insertQuery, sessionToken, userID, appName, sessionToken, expiresAt)
+	err = a.db.Exec(ctx, appName, insertQuery, sessionID, userID, appName, sessionToken, expiresAt)
 	if err != nil {
 		slog.Error("failed to create session", "app", appName, "user_id", userID, "error", err)
 		return nil, fmt.Errorf("auth.SignIn: %w", err)
 	}
 
 	session := &Session{
-		ID:        sessionToken,
+		ID:        sessionID,
 		UserID:    userID,
 		AppName:   appName,
 		Token:     sessionToken,
@@ -69,7 +71,7 @@ func (a *authImpl) SignIn(ctx context.Context, appName, domainName, username, pa
 		ExpiresAt: expiresAt,
 	}
 
-	slog.Info("session created", "app", appName, "user_id", userID, "session_id", sessionToken)
+	slog.Info("session created", "app", appName, "user_id", userID, "session_id", sessionID)
 	return session, nil
 }
 

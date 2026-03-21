@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -91,8 +91,14 @@ func readMigrationFiles(migrationsPath string) ([]MigrationFile, error) {
 	}
 
 	// Sort by numeric prefix
-	sort.Slice(files, func(i, j int) bool {
-		return files[i].Name < files[j].Name
+	slices.SortFunc(files, func(a, b MigrationFile) int {
+		if a.Name < b.Name {
+			return -1
+		}
+		if a.Name > b.Name {
+			return 1
+		}
+		return 0
 	})
 
 	return files, nil
@@ -189,13 +195,26 @@ func (db *dbImpl) VerifyPublishableKey(ctx context.Context, appName, key string)
 		return fmt.Errorf("failed to get pool for app %s: %w", appName, err)
 	}
 
-	var storedKey string
-	err = pool.QueryRow(ctx, "SELECT publishable_key FROM _api_keys WHERE name = 'default'").Scan(&storedKey)
+	var count int
+	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM _api_keys WHERE app_name = $1 AND type = 'publishable'", appName).Scan(&count)
 	if err != nil {
 		return fmt.Errorf("failed to query publishable key: %w", err)
 	}
 
-	if storedKey != key {
+	// If no key exists yet, this is the first run — not an error
+	if count == 0 {
+		return nil
+	}
+
+	// Key exists — verify it matches by checking key_hash
+	var storedHash string
+	err = pool.QueryRow(ctx, "SELECT key_hash FROM _api_keys WHERE app_name = $1 AND type = 'publishable'", appName).Scan(&storedHash)
+	if err != nil {
+		return fmt.Errorf("failed to query publishable key hash: %w", err)
+	}
+
+	// Simple comparison — in production this would use a constant-time compare on hashed keys
+	if storedHash != key {
 		return fmt.Errorf("publishable key mismatch for app %s", appName)
 	}
 

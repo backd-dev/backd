@@ -44,9 +44,10 @@ func (p *Pool) Acquire() (*Runner, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Find an available runner
+	// Find an available runner and mark it busy
 	for _, runner := range p.runners {
 		if runner.Ready {
+			runner.Ready = false
 			runner.LastUsed = time.Now()
 			return runner, nil
 		}
@@ -132,9 +133,9 @@ func (p *Pool) spawnRunner() (*Runner, error) {
 
 // waitForReady waits for the runner to send READY signal
 func (p *Pool) waitForReady(runner *Runner) error {
-	// This would read from stdout and wait for "READY\n"
-	// For now, we'll simulate this with a timeout
-	time.Sleep(100 * time.Millisecond) // Give process time to start
+	// In production this reads READY\n from stdout via waitForReadySignal.
+	// For now, mark ready after a brief delay to allow process startup.
+	time.Sleep(100 * time.Millisecond)
 	runner.Ready = true
 	return nil
 }
@@ -234,11 +235,12 @@ func (j *JobWorker) workerLoop() {
 // processJobs fetches and processes pending jobs
 func (j *JobWorker) processJobs() {
 	// Query for pending jobs using FOR UPDATE SKIP LOCKED
+	// Column names match unified _jobs DDL
 	query := `
-		SELECT id, app_name, function, input, max_attempts, attempts
+		SELECT id, app_name, function, payload, max_attempts, attempts
 		FROM _jobs 
-		WHERE status = 'pending' AND scheduled_at <= NOW()
-		ORDER BY scheduled_at ASC
+		WHERE status = 'pending' AND run_at <= NOW()
+		ORDER BY run_at ASC
 		LIMIT 10
 		FOR UPDATE SKIP LOCKED`
 
@@ -248,11 +250,15 @@ func (j *JobWorker) processJobs() {
 	}
 
 	for _, jobData := range jobs {
+		var payload []byte
+		if p, ok := jobData["payload"].(string); ok {
+			payload = []byte(p)
+		}
 		job := Job{
 			ID:          jobData["id"].(string),
 			AppName:     jobData["app_name"].(string),
 			Function:    jobData["function"].(string),
-			Input:       []byte(jobData["input"].(string)),
+			Input:       payload,
 			MaxAttempts: int(jobData["max_attempts"].(int64)),
 			Attempts:    int(jobData["attempts"].(int64)),
 		}
@@ -276,7 +282,7 @@ func (j *JobWorker) processJob(job Job) {
 	} else {
 		// Mark job as completed
 		j.db.Exec(j.ctx, job.AppName,
-			"UPDATE _jobs SET status = 'completed', completed_at = NOW() WHERE id = $1", job.ID)
+			"UPDATE _jobs SET status = 'completed', completed_at = NOW(), updated_at = NOW() WHERE id = $1", job.ID)
 	}
 }
 
@@ -299,14 +305,14 @@ func (j *JobWorker) handleJobFailure(job Job, err error) {
 	}
 
 	if backoff > 0 {
-		// Schedule retry
+		// Schedule retry with backoff
 		j.db.Exec(j.ctx, job.AppName,
-			`UPDATE _jobs SET status = $1, scheduled_at = NOW() + $2, error = $3 WHERE id = $4`,
-			newStatus, backoff, err.Error(), job.ID)
+			`UPDATE _jobs SET status = $1, run_at = NOW() + $2::interval, error = $3, updated_at = NOW() WHERE id = $4`,
+			newStatus, fmt.Sprintf("%d seconds", int(backoff.Seconds())), err.Error(), job.ID)
 	} else {
 		// Mark as failed
 		j.db.Exec(j.ctx, job.AppName,
-			"UPDATE _jobs SET status = 'failed', error = $1 WHERE id = $2",
+			"UPDATE _jobs SET status = 'failed', error = $1, updated_at = NOW() WHERE id = $2",
 			err.Error(), job.ID)
 	}
 }

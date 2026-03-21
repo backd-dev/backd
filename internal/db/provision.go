@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -58,19 +59,18 @@ func (db *dbImpl) Provision(ctx context.Context, name string, dbType DBType) err
 	return nil
 }
 
-// replaceDatabaseName replaces the database name in a DSN
+// replaceDatabaseName replaces the database name in a DSN using proper URL parsing
 func replaceDatabaseName(dsn, newDBName string) string {
-	// Parse the DSN and replace the database name
-	parts := strings.Split(dsn, "/")
-	if len(parts) >= 4 {
-		// Format: postgres://user:pass@host:port/database
-		parts[len(parts)-1] = newDBName
-		return strings.Join(parts, "/")
+	u, err := url.Parse(dsn)
+	if err != nil {
+		// Fallback: try basic string replacement
+		parts := strings.Split(dsn, "/")
+		if len(parts) >= 4 {
+			parts[len(parts)-1] = newDBName
+			return strings.Join(parts, "/")
+		}
+		return dsn
 	}
-
-	// If we can't parse it, just append the new database name
-	if strings.Contains(dsn, "?") {
-		return dsn + "&dbname=" + newDBName
-	}
-	return dsn + "?dbname=" + newDBName
+	u.Path = "/" + newDBName
+	return u.String()
 }

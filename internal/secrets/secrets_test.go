@@ -26,7 +26,7 @@ func (m *mockDB) Query(ctx context.Context, app, query string, args ...any) ([]m
 	if appSecrets, exists := m.secrets[app]; exists {
 		if secret, exists := appSecrets[args[0].(string)]; exists {
 			return []map[string]any{
-				{"encrypted_value": secret},
+				{"value_encrypted": secret},
 			}, nil
 		}
 	}
@@ -36,10 +36,10 @@ func (m *mockDB) Query(ctx context.Context, app, query string, args ...any) ([]m
 func (m *mockDB) Exec(ctx context.Context, app, query string, args ...any) error {
 	// Handle upsert for secrets
 	if query == `
-		INSERT INTO _secrets (name, encrypted_value) 
+		INSERT INTO _secrets (name, value_encrypted) 
 		VALUES ($1, $2) 
 		ON CONFLICT (name) DO UPDATE SET 
-			encrypted_value = EXCLUDED.encrypted_value,
+			value_encrypted = EXCLUDED.value_encrypted,
 			updated_at = NOW()
 	` {
 		if m.secrets[app] == nil {
@@ -118,15 +118,24 @@ func TestDeriveAppKey(t *testing.T) {
 	master := []byte("test-master-key-32-bytes-long")
 
 	// Test that same inputs produce same key (deterministic)
-	key1 := DeriveAppKey(master, "app_a")
-	key2 := DeriveAppKey(master, "app_a")
+	key1, err := DeriveAppKey(master, "app_a")
+	if err != nil {
+		t.Fatalf("DeriveAppKey failed: %v", err)
+	}
+	key2, err := DeriveAppKey(master, "app_a")
+	if err != nil {
+		t.Fatalf("DeriveAppKey failed: %v", err)
+	}
 
 	if string(key1) != string(key2) {
 		t.Error("DeriveAppKey should be deterministic")
 	}
 
 	// Test that different apps produce different keys
-	key3 := DeriveAppKey(master, "app_b")
+	key3, err := DeriveAppKey(master, "app_b")
+	if err != nil {
+		t.Fatalf("DeriveAppKey failed: %v", err)
+	}
 	if string(key1) == string(key3) {
 		t.Error("Different apps should produce different keys")
 	}
@@ -141,15 +150,24 @@ func TestDeriveDomainKey(t *testing.T) {
 	master := []byte("test-master-key-32-bytes-long")
 
 	// Test that same inputs produce same key (deterministic)
-	key1 := DeriveDomainKey(master, "domain_a")
-	key2 := DeriveDomainKey(master, "domain_a")
+	key1, err := DeriveDomainKey(master, "domain_a")
+	if err != nil {
+		t.Fatalf("DeriveDomainKey failed: %v", err)
+	}
+	key2, err := DeriveDomainKey(master, "domain_a")
+	if err != nil {
+		t.Fatalf("DeriveDomainKey failed: %v", err)
+	}
 
 	if string(key1) != string(key2) {
 		t.Error("DeriveDomainKey should be deterministic")
 	}
 
 	// Test that different domains produce different keys
-	key3 := DeriveDomainKey(master, "domain_b")
+	key3, err := DeriveDomainKey(master, "domain_b")
+	if err != nil {
+		t.Fatalf("DeriveDomainKey failed: %v", err)
+	}
 	if string(key1) == string(key3) {
 		t.Error("Different domains should produce different keys")
 	}
@@ -160,7 +178,10 @@ func TestDeriveDomainKey(t *testing.T) {
 	}
 
 	// Test that domain keys are different from app keys
-	appKey := DeriveAppKey(master, "domain_a")
+	appKey, err := DeriveAppKey(master, "domain_a")
+	if err != nil {
+		t.Fatalf("DeriveAppKey failed: %v", err)
+	}
 	if string(key1) == string(appKey) {
 		t.Error("Domain keys should be different from app keys")
 	}

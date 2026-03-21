@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -24,40 +25,43 @@ func handleFunctionCall(deps *Deps) Handler {
 		if functionName == "" {
 			return nil, ErrBadRequest("MISSING_FUNCTION_NAME", "Function name is required")
 		}
-		
+
 		// Reject underscore-prefixed function names at the HTTP layer
 		// Private functions are never reachable via HTTP from any client
 		if strings.HasPrefix(functionName, "_") {
 			return nil, ErrFunctionNotFound("Function not found")
 		}
-		
+
 		// Check if functions client is available
 		if deps.FunctionsClient == nil {
 			return nil, ErrServiceUnavailable("Functions service not available")
 		}
-		
+
 		// Forward request to functions service
 		response, err := deps.FunctionsClient.Call(r.Context(), rc.AppName, functionName, r)
 		if err != nil {
 			return nil, ErrInternal("Failed to call function")
 		}
-		
-		// Check response status
-		if response.Status >= 400 {
-			// For non-2xx responses, pass through the error
-			if response.Status == 404 {
-				return nil, ErrFunctionNotFound("Function not found")
-			} else if response.Status == 500 {
-				return nil, ErrInternal("Function execution failed")
-			} else {
-				return nil, ErrInternal("Function call failed")
+
+		// Pass through the response verbatim — non-2xx responses are not wrapped
+		// Return raw body for the Handler wrapper to serialize
+		var result any
+		if len(response.Body) > 0 {
+			// Try to parse as JSON for proper envelope; fall back to raw bytes
+			if err := json.Unmarshal(response.Body, &result); err != nil {
+				result = string(response.Body)
 			}
 		}
-		
-		// Return the function response
-		// The response body is already JSON, so we need to parse it or return it as-is
-		// For now, return it as raw bytes - in a complete implementation,
-		// we might want to parse and validate the JSON
-		return response.Body, nil
+
+		// For error status codes, return as a BackdError with the original body
+		if response.Status >= 400 {
+			return nil, &BackdError{
+				Code:       "FUNCTION_ERROR",
+				Detail:     string(response.Body),
+				StatusCode: response.Status,
+			}
+		}
+
+		return result, nil
 	}
 }

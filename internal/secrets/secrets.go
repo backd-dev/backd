@@ -35,7 +35,7 @@ func NewSecrets(database db.DB, masterKey []byte) Secrets {
 // Get retrieves a secret, decrypts it, and logs the access
 func (s *secretsImpl) Get(ctx context.Context, appName, name string) (string, error) {
 	// Query encrypted secret from database
-	query := `SELECT encrypted_value FROM _secrets WHERE name = $1`
+	query := `SELECT value_encrypted FROM _secrets WHERE name = $1`
 	rows, err := s.db.Query(ctx, appName, query, name)
 	if err != nil {
 		return "", fmt.Errorf("secrets.Get: query failed: %w", err)
@@ -44,13 +44,16 @@ func (s *secretsImpl) Get(ctx context.Context, appName, name string) (string, er
 		return "", ErrSecretNotFound
 	}
 
-	encryptedValue, ok := rows[0]["encrypted_value"].(string)
+	encryptedValue, ok := rows[0]["value_encrypted"].(string)
 	if !ok {
 		return "", fmt.Errorf("secrets.Get: invalid encrypted value type")
 	}
 
 	// Derive app-specific key
-	appKey := DeriveAppKey(s.masterKey, appName)
+	appKey, err := DeriveAppKey(s.masterKey, appName)
+	if err != nil {
+		return "", fmt.Errorf("secrets.Get: key derivation failed: %w", err)
+	}
 
 	// Decrypt the secret
 	plaintext, err := Decrypt(appKey, encryptedValue)
@@ -70,7 +73,10 @@ func (s *secretsImpl) Get(ctx context.Context, appName, name string) (string, er
 // Set encrypts and stores a secret
 func (s *secretsImpl) Set(ctx context.Context, appName, name, value string) error {
 	// Derive app-specific key
-	appKey := DeriveAppKey(s.masterKey, appName)
+	appKey, err := DeriveAppKey(s.masterKey, appName)
+	if err != nil {
+		return fmt.Errorf("secrets.Set: key derivation failed: %w", err)
+	}
 
 	// Encrypt the secret
 	encryptedValue, err := Encrypt(appKey, value)
@@ -80,10 +86,10 @@ func (s *secretsImpl) Set(ctx context.Context, appName, name, value string) erro
 
 	// Store in database (upsert)
 	query := `
-		INSERT INTO _secrets (name, encrypted_value) 
+		INSERT INTO _secrets (name, value_encrypted) 
 		VALUES ($1, $2) 
 		ON CONFLICT (name) DO UPDATE SET 
-			encrypted_value = EXCLUDED.encrypted_value,
+			value_encrypted = EXCLUDED.value_encrypted,
 			updated_at = NOW()
 	`
 	if err := s.db.Exec(ctx, appName, query, name, encryptedValue); err != nil {

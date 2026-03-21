@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -80,16 +81,11 @@ func ParseQueryParams(r *http.Request) (*QueryParams, error) {
 	return qp, nil
 }
 
-// parseWhereFilter parses a JSON where filter string using filterql package
+// parseWhereFilter parses a URL-decoded JSON where filter string
 func parseWhereFilter(whereStr string) (map[string]any, error) {
-	// This would typically use json.Unmarshal, but since we need to integrate
-	// with filterql package, we'll delegate to it for validation and parsing
-	// For now, return a simple placeholder
-	// In a complete implementation, this would:
-	// 1. Parse the JSON string
-	// 2. Validate using filterql package
-	// 3. Return the parsed filter
-
-	// Placeholder implementation - will be completed when filterql integration is done
-	return make(map[string]any), nil
+	var filter map[string]any
+	if err := json.Unmarshal([]byte(whereStr), &filter); err != nil {
+		return nil, err
+	}
+	return filter, nil
 }
