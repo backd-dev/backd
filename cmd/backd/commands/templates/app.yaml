@@ -1,0 +1,58 @@
+name: __APP_NAME__
+description: "A backd application"
+
+database:
+  # Use the server default DATABASE_URL, or override here
+  # dsn: "postgres://user:pass@localhost:5432/backd___APP_NAME__"
+  # host: "localhost"
+  # port: 5432
+  # database: "backd___APP_NAME__"
+  # user: "postgres"
+  # password: ""
+
+auth:
+  # Domain for authentication (optional)
+  # domain: "mydomain"
+  providers:
+    local:
+      enabled: true
+    # google:
+    #   enabled: false
+    #   client_id: ""
+    #   client_secret: ""
+
+keys:
+  publishable: "__PUBLISHABLE_KEY__"
+  # secret: ""  # Generated on first run
+
+# Storage configuration (optional)
+# storage:
+#   endpoint: "http://localhost:9000"
+#   region: "us-east-1"
+#   bucket: "backd-__APP_NAME__"
+#   access_key: ""
+#   secret_key: ""
+
+# Job queue configuration
+jobs:
+  enabled: true
+  max_workers: 5
+
+# Cron jobs (optional)
+# cron:
+#   - schedule: "0 * * * *"  # Every hour
+#     function: "cleanup_task"
+#     input: {}
+
+# RLS policies (optional)
+# policies:
+#   posts:
+#     select: "auth.uid = user_id OR is_public = true"
+#     insert: "auth.uid = user_id"
+#     update: "auth.uid = user_id"
+#     delete: "auth.uid = user_id"
+
+# Environment variable references for secrets
+secrets:
+  # db_password: "${DB_PASSWORD}"
+  # storage_key: "${STORAGE_ACCESS_KEY}"

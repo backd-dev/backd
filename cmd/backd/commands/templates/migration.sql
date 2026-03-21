@@ -1,0 +1,18 @@
+-- Migration: 001_init.sql
+-- Description: Initial database schema for __APP_NAME__
+-- 
+-- This file is intentionally empty as a starting point.
+-- Add your table definitions here.
+--
+-- Example:
+-- CREATE TABLE posts (
+--   _id TEXT PRIMARY KEY DEFAULT generate_object_id(),
+--   title TEXT NOT NULL,
+--   content TEXT,
+--   user_id TEXT NOT NULL,
+--   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+--   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+-- );
+--
+-- CREATE INDEX posts_user_id_idx ON posts(user_id);
+-- CREATE INDEX posts_created_at_idx ON posts(created_at);

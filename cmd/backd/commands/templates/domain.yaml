@@ -1,0 +1,17 @@
+name: __DOMAIN_NAME__
+description: "A backd authentication domain"
+
+provider: password
+
+# Session configuration
+session_expiry: "24h"
+allow_registration: true
+
+# Database configuration (optional, will inherit server default)
+database:
+  # dsn: "postgres://user:pass@localhost:5432/backd_auth"
+  # host: "localhost"
+  # port: 5432
+  # database: "backd_auth"
+  # user: "postgres"
+  # password: ""

@@ -1,0 +1,87 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: backd_platform
+      POSTGRES_USER: backd
+      POSTGRES_PASSWORD: backd_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U backd"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DATABASE_URL: postgres://backd:backd_password@postgres:5432/backd_platform
+      BACKD_ENCRYPTION_KEY: ${BACKD_ENCRYPTION_KEY}
+      BACKD_JWT_KEY: ${BACKD_JWT_KEY}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./apps:/apps:ro
+
+  functions:
+    build:
+      context: .
+      dockerfile: Dockerfile.functions
+    environment:
+      DATABASE_URL: postgres://backd:backd_password@postgres:5432/backd_platform
+      BACKD_SECRET_KEY: ${BACKD_SECRET_KEY}
+    ports:
+      - "8081:8081"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./apps:/apps:ro
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: ./api worker
+    environment:
+      DATABASE_URL: postgres://backd:backd_password@postgres:5432/backd_platform
+      BACKD_ENCRYPTION_KEY: ${BACKD_ENCRYPTION_KEY}
+      BACKD_JWT_KEY: ${BACKD_JWT_KEY}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./apps:/apps:ro
+
+volumes:
+  postgres_data:
+  minio_data:

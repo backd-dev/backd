@@ -62,8 +62,8 @@ pgdata/
 .deno/
 
 # Backd specific
-backd
-backd-api
+./backd
+./backd-api
 ./api
 
 # Node modules (for any JS/TS tooling)
