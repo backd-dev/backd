@@ -6,6 +6,7 @@ require (
 	github.com/google/cel-go v0.27.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/rs/xid v1.6.0
+	golang.org/x/crypto v0.49.0 // reason: HKDF key derivation and AES-256-GCM encryption for secrets management
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -18,8 +19,8 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/rogpeppe/go-internal v1.6.1 // indirect
 	golang.org/x/exp v0.0.0-20240823005443-9b4947da3948 // indirect
-	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240826202546-f6391c0de4c7 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240826202546-f6391c0de4c7 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
