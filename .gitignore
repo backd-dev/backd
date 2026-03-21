@@ -64,7 +64,7 @@ pgdata/
 # Backd specific
 backd
 backd-api
-api
+./api
 
 # Node modules (for any JS/TS tooling)
 node_modules/
