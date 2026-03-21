@@ -54,7 +54,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// RecoveryMiddleware recovers from panics and returns 500 error
+// RecoveryMiddleware recovers from panics and re-panics to let Handler wrapper handle them
 func RecoveryMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -65,8 +65,8 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 					"method", r.Method,
 					"request_id", RequestContextFrom(r.Context()).RequestID,
 				)
-
-				writeError(w, ErrInternal("Internal server error"))
+				// Re-panic to let the Handler wrapper in handler.go handle the response writing
+				panic(err)
 			}
 		}()
 
@@ -75,7 +75,7 @@ func RecoveryMiddleware(next http.Handler) http.Handler {
 }
 
 // AuthMiddleware validates sessions and API keys, populating RequestContext
-func AuthMiddleware(auth auth.Auth) func(http.Handler) http.Handler {
+func AuthMiddleware(authService auth.Auth) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			rc := RequestContextFrom(r.Context())
@@ -87,10 +87,18 @@ func AuthMiddleware(auth auth.Auth) func(http.Handler) http.Handler {
 				return
 			}
 
-			// Try session authentication first
-			sessionToken := extractBearerToken(r.Header.Get("Authorization"))
+			// Try session authentication first (X-Session header or backd_session cookie)
+			sessionToken := r.Header.Get("X-Session")
+			if sessionToken == "" {
+				// Fall back to cookie
+				cookie, err := r.Cookie("backd_session")
+				if err == nil {
+					sessionToken = cookie.Value
+				}
+			}
+
 			if sessionToken != "" {
-				authCtx, err := auth.ValidateSession(r.Context(), sessionToken)
+				authCtx, err := authService.ValidateSession(r.Context(), sessionToken)
 				if err == nil {
 					rc.UserID = authCtx.UID
 					rc.Authenticated = true
@@ -102,13 +110,23 @@ func AuthMiddleware(auth auth.Auth) func(http.Handler) http.Handler {
 
 			// If no valid session, try API key authentication
 			if !rc.Authenticated {
-				apiKey := r.Header.Get("X-API-Key")
-				if apiKey != "" {
-					keyType, err := auth.ValidateKey(r.Context(), rc.AppName, apiKey)
-					if err == nil {
-						// API keys don't provide user ID directly, they're for service access
+				// Check for publishable key
+				publishableKey := r.Header.Get("X-Publishable-Key")
+				if publishableKey != "" {
+					keyType, err := authService.ValidateKey(r.Context(), rc.AppName, publishableKey)
+					if err == nil && keyType == auth.KeyTypePublishable {
 						rc.Authenticated = true
-						rc.KeyType = string(keyType)
+						rc.KeyType = "publishable"
+					}
+				} else {
+					// Check for secret key (internal Deno calls only)
+					secretKey := r.Header.Get("X-Secret-Key")
+					if secretKey != "" {
+						keyType, err := authService.ValidateKey(r.Context(), rc.AppName, secretKey)
+						if err == nil && keyType == auth.KeyTypeSecret {
+							rc.Authenticated = true
+							rc.KeyType = "secret"
+						}
 					}
 				}
 			}

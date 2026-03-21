@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+
+	"github.com/go-chi/chi/v5"
 )
 
 // Handler defines the signature for all API handlers
@@ -49,21 +51,21 @@ func (h Handler) Handle(deps *Deps) http.HandlerFunc {
 
 // Router wraps chi.Router and provides handler registration
 type Router struct {
-	r    *http.ServeMux
+	r    chi.Router
 	deps *Deps
 }
 
 // NewAPIRouter creates a new API router with the given dependencies
 func NewAPIRouter(deps *Deps) *Router {
 	return &Router{
-		r:    http.NewServeMux(),
+		r:    chi.NewRouter(),
 		deps: deps,
 	}
 }
 
 // Handle registers a handler for the given pattern
 func (router *Router) Handle(pattern string, handler Handler) {
-	router.r.Handle(pattern, handler.Handle(router.deps))
+	router.r.Handle(pattern, http.HandlerFunc(handler.Handle(router.deps)))
 }
 
 // ServeHTTP implements http.Handler interface
