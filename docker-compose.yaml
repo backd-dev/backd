@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: backd-postgres
+    environment:
+      POSTGRES_DB: backd_platform
+      POSTGRES_USER: backd
+      POSTGRES_PASSWORD: backd123
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U backd"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: backd-minio
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: backd-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin123;
+      /usr/bin/mc mb myminio/backd-apps --ignore-existing;
+      /usr/bin/mc mb myminio/backd-functions --ignore-existing;
+      /usr/bin/mc policy set public myminio/backd-apps;
+      /usr/bin/mc policy set public myminio/backd-functions;
+      exit 0;
+      "
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: backd-api
+    environment:
+      BACKD_ENCRYPTION_KEY: test-encryption-key-32-chars-long
+      DATABASE_URL: postgres://backd:backd123@postgres:5432/backd_platform
+      BACKD_FUNCTIONS_URL: http://functions:8081
+      LOG_LEVEL: debug
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  functions:
+    build:
+      context: .
+      dockerfile: Dockerfile.functions
+    container_name: backd-functions
+    environment:
+      BACKD_ENCRYPTION_KEY: test-encryption-key-32-chars-long
+      DATABASE_URL: postgres://backd:backd123@postgres:5432/backd_platform
+      BACKD_INTERNAL_URL: http://localhost:9191
+      LOG_LEVEL: debug
+    ports:
+      - "8081:8081"
+      - "9191:9191"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.functions
+    container_name: backd-worker
+    environment:
+      BACKD_ENCRYPTION_KEY: test-encryption-key-32-chars-long
+      DATABASE_URL: postgres://backd:backd123@postgres:5432/backd_platform
+      BACKD_INTERNAL_URL: http://localhost:9191
+      LOG_LEVEL: debug
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    command: ["./api", "functions", "--mode", "worker"]
+
+volumes:
+  pgdata:
+  minio_data:
+
+networks:
+  default:
+    name: backd-network

@@ -47,12 +47,23 @@ temp/
 
 # Environment files
 .env
+.env.secrets
 .env.local
 .env.*.local
 
 # Build output
 dist/
 build/
+
+# PostgreSQL data directory
+pgdata/
+
+# Deno cache and temporary files
+.deno/
+
+# Backd specific
+backd
+backd-api
 
 # Node modules (for any JS/TS tooling)
 node_modules/

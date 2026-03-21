@@ -1,0 +1,44 @@
+# Multi-stage build for backd functions service
+FROM golang:1.26.1-alpine AS go-builder
+
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates tzdata
+
+# Set working directory
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the API binary
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o api ./cmd/api
+
+# Runtime stage: Deno with Go binary
+FROM denoland/deno:2.0-alpine
+
+# Install ca-certificates
+RUN apk add --no-cache ca-certificates
+
+# Set working directory
+WORKDIR /app
+
+# Copy the Go binary from go-builder
+COPY --from=go-builder /app/api /app/api
+
+# Make binary executable
+RUN chmod +x /app/api
+
+# Create deno user (matching deno image)
+USER deno
+
+# Expose ports
+EXPOSE 8081 9191
+
+# Set entrypoint for functions mode
+ENTRYPOINT ["/app/api"]
