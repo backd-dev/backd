@@ -62,6 +62,7 @@ type PolicyResult struct {
 	SQLClause string            `json:"sql_clause"`
 	Params    []any             `json:"params"`
 	Defaults  map[string]string `json:"defaults"`
+	Columns   []string          `json:"columns"`  // allowlist of columns
 	SoftCol   string            `json:"soft_col"` // empty if hard delete
 }
 
@@ -96,6 +97,9 @@ type Auth interface {
 	// RLS
 	LoadPolicies(ctx context.Context, appName string, cfg *config.AppConfig) error
 	EvaluatePolicy(ctx context.Context, appName, table, operation string, rc *RequestContext) (PolicyResult, error)
+
+	// Defaults application for CRUD operations
+	ApplyDefaults(defaults map[string]string, rc *RequestContext) map[string]any
 }
 
 // authImpl implements the Auth interface

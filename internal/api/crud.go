@@ -1,9 +1,13 @@
 package api
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/backd-dev/backd/internal/auth"
+	"github.com/backd-dev/backd/internal/db"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -69,28 +73,54 @@ func makeCRUDHandler(deps *Deps, operation CRUDOperation) Handler {
 		}
 
 		// Step 3: ApplyDefaults → overwrite payload with auth.uid/now()/etc
-		// This would apply defaults from policy result
-		// Placeholder implementation
+		var payload map[string]any
+		if operation == OP_CREATE || operation == OP_UPDATE || operation == OP_PATCH {
+			// Parse request body for operations that need payload
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				return nil, ErrBadRequest("INVALID_JSON", "Invalid JSON body")
+			}
+		}
+
+		// Apply defaults from policy result
+		if len(policyResult.Defaults) > 0 && (operation == OP_CREATE || operation == OP_PATCH) {
+			// Create auth context for defaults application
+			authContext := &auth.RequestContext{
+				UID:           rc.UserID,
+				Meta:          rc.Meta,
+				MetaApp:       rc.MetaApp,
+				Authenticated: rc.Authenticated,
+				KeyType:       rc.KeyType,
+			}
+
+			// Apply defaults and merge with payload
+			defaults := deps.Auth.ApplyDefaults(policyResult.Defaults, authContext)
+			for key, value := range defaults {
+				if _, exists := payload[key]; !exists {
+					payload[key] = value
+				}
+			}
+		}
 
 		// Step 4: StripColumns → remove keys not in policy.columns
-		// This would filter request payload based on policy
-		// Placeholder implementation
+		if operation == OP_CREATE || operation == OP_UPDATE || operation == OP_PATCH {
+			payload = stripColumns(payload, policyResult.Columns)
+		}
 
 		// Step 5: ExecuteQuery → []map[string]any rows
 		var result any
 		switch operation {
 		case OP_LIST:
-			result, err = executeListQuery(deps, rc, queryParams, policyResult)
+			result, err = executeListQuery(deps, r, rc, queryParams, policyResult)
 		case OP_CREATE:
-			result, err = executeCreateQuery(deps, rc, queryParams, policyResult)
+			result, err = executeCreateQuery(deps, r, rc, payload, policyResult)
 		case OP_GET:
-			result, err = executeGetQuery(deps, rc, queryParams, policyResult)
+			result, err = executeGetQuery(deps, r, rc, queryParams, policyResult)
 		case OP_UPDATE:
-			result, err = executeUpdateQuery(deps, rc, queryParams, policyResult)
+			result, err = executeUpdateQuery(deps, r, rc, payload, policyResult)
 		case OP_PATCH:
-			result, err = executePatchQuery(deps, rc, queryParams, policyResult)
+			result, err = executePatchQuery(deps, r, rc, payload, policyResult)
 		case OP_DELETE:
-			result, err = executeDeleteQuery(deps, rc, queryParams, policyResult)
+			result, err = executeDeleteQuery(deps, r, rc, queryParams, policyResult)
 		default:
 			return nil, ErrInternal("Unsupported operation")
 		}
@@ -100,8 +130,9 @@ func makeCRUDHandler(deps *Deps, operation CRUDOperation) Handler {
 		}
 
 		// Step 6: FilterResponseColumns → apply SELECT policy.columns
-		// This would filter response based on policy
-		// Placeholder implementation
+		if operation == OP_LIST || operation == OP_GET {
+			result = filterResponseColumns(result, policyResult.Columns)
+		}
 
 		// Step 7: ResolveFiles → __file UUID → FileDescriptor
 		// This would integrate with storage package to resolve file references
@@ -113,35 +144,236 @@ func makeCRUDHandler(deps *Deps, operation CRUDOperation) Handler {
 	}
 }
 
+// filterResponseColumns removes keys from response data that are not in the allowed SELECT columns
+func filterResponseColumns(result any, allowedColumns []string) any {
+	if result == nil || len(allowedColumns) == 0 || allowedColumns[0] == "*" {
+		return result // No filtering needed
+	}
+
+	// Create a set of allowed columns for efficient lookup
+	allowed := make(map[string]bool)
+	for _, col := range allowedColumns {
+		allowed[col] = true
+	}
+
+	switch v := result.(type) {
+	case map[string]any:
+		// Check if this is a paginated response with data array
+		if data, exists := v["data"]; exists {
+			if dataSlice, ok := data.([]map[string]any); ok {
+				filtered := make([]map[string]any, len(dataSlice))
+				for i, record := range dataSlice {
+					filtered[i] = filterSingleRecord(record, allowed)
+				}
+				v["data"] = filtered
+				return v
+			}
+		}
+		// Otherwise treat as single record
+		return filterSingleRecord(v, allowed)
+	case []map[string]any:
+		// Array of records
+		filtered := make([]map[string]any, len(v))
+		for i, record := range v {
+			filtered[i] = filterSingleRecord(record, allowed)
+		}
+		return filtered
+	default:
+		return result
+	}
+}
+
+// filterSingleRecord filters a single record based on allowed columns
+func filterSingleRecord(record map[string]any, allowed map[string]bool) map[string]any {
+	if record == nil {
+		return record
+	}
+
+	filtered := make(map[string]any)
+	for key, value := range record {
+		if allowed[key] {
+			filtered[key] = value
+		}
+	}
+	return filtered
+}
+func stripColumns(payload map[string]any, allowedColumns []string) map[string]any {
+	if payload == nil || len(allowedColumns) == 0 {
+		return payload
+	}
+
+	// Create a set of allowed columns for efficient lookup
+	allowed := make(map[string]bool)
+	for _, col := range allowedColumns {
+		allowed[col] = true
+	}
+
+	// Filter payload
+	filtered := make(map[string]any)
+	for key, value := range payload {
+		if allowed[key] {
+			filtered[key] = value
+		}
+	}
+
+	return filtered
+}
+
 // Placeholder query execution functions
 // These would be fully implemented with actual database queries
 
-func executeListQuery(deps *Deps, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
-	// Placeholder: would execute SELECT query with policy clause
-	return []map[string]any{}, nil
+func executeListQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
+	collection := chi.URLParam(r, "collection")
+
+	// Build SELECT query with policy clause
+	query := fmt.Sprintf("SELECT * FROM %s WHERE %s", collection, policyResult.SQLClause)
+
+	// Add WHERE clause from query params if present
+	var args []any
+	if qp.Where != nil && len(qp.Where) > 0 {
+		// This would integrate with filterql package to transpile the where clause
+		// For now, we'll use the policy clause only
+		args = append(args, policyResult.Params...)
+	} else {
+		args = policyResult.Params
+	}
+
+	// Add ORDER BY clause
+	if len(qp.Order) > 0 {
+		query += " ORDER BY " + strings.Join(qp.Order, ", ")
+	}
+
+	// Add LIMIT and OFFSET
+	query += fmt.Sprintf(" LIMIT %d OFFSET %d", qp.Limit, qp.Offset)
+
+	// Execute query
+	rows, err := deps.DB.Query(r.Context(), rc.AppName, query, args...)
+	if err != nil {
+		return nil, ErrInternal("Database query failed")
+	}
+
+	// Get total count for pagination
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", collection, policyResult.SQLClause)
+	countResult, err := deps.DB.QueryOne(r.Context(), rc.AppName, countQuery, policyResult.Params...)
+	if err != nil {
+		return nil, ErrInternal("Failed to get total count")
+	}
+
+	var count int64
+	if countVal := countResult["count"]; countVal != nil {
+		count = countVal.(int64)
+	}
+
+	// Return paginated response
+	return map[string]any{
+		"data":   rows,
+		"count":  count,
+		"limit":  qp.Limit,
+		"offset": qp.Offset,
+	}, nil
 }
 
-func executeCreateQuery(deps *Deps, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
-	// Placeholder: would execute INSERT query with policy defaults
-	return map[string]any{"id": "new-id"}, nil
+func executeCreateQuery(deps *Deps, r *http.Request, rc *RequestContext, payload map[string]any, policyResult auth.PolicyResult) (any, error) {
+	collection := chi.URLParam(r, "collection")
+	id := db.NewXID()
+
+	// Build INSERT query with policy clause
+	// Get column names and values from payload
+	var columns []string
+	var values []any
+	var placeholders []string
+
+	for key, value := range payload {
+		columns = append(columns, key)
+		values = append(values, value)
+		placeholders = append(placeholders, fmt.Sprintf("$%d", len(values)))
+	}
+
+	// Add ID and created_at
+	columns = append(columns, "id", "created_at")
+	values = append(values, id, "NOW()")
+	placeholders = append(placeholders, fmt.Sprintf("$%d", len(values)), "NOW()")
+
+	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", collection, strings.Join(columns, ", "), strings.Join(placeholders, ", "))
+
+	// Execute query
+	err := deps.DB.Exec(r.Context(), rc.AppName, query, values...)
+	if err != nil {
+		return nil, ErrInternal("Failed to create record")
+	}
+
+	// Return the created record
+	return map[string]any{"id": id}, nil
 }
 
-func executeGetQuery(deps *Deps, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
-	// Placeholder: would execute SELECT query for single item
-	return map[string]any{"id": "item-id"}, nil
+func executeGetQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
+	collection := chi.URLParam(r, "collection")
+	id := chi.URLParam(r, "id")
+
+	// Build SELECT query with policy clause
+	query := fmt.Sprintf("SELECT * FROM %s WHERE %s AND id = $%d", collection, policyResult.SQLClause, len(policyResult.Params)+1)
+	args := append(policyResult.Params, id)
+
+	// Execute query
+	result, err := deps.DB.QueryOne(r.Context(), rc.AppName, query, args...)
+	if err != nil {
+		return nil, ErrNotFound("Record not found")
+	}
+
+	return result, nil
 }
 
-func executeUpdateQuery(deps *Deps, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
-	// Placeholder: would execute UPDATE query
-	return map[string]any{"id": "item-id"}, nil
+func executeUpdateQuery(deps *Deps, r *http.Request, rc *RequestContext, payload map[string]any, policyResult auth.PolicyResult) (any, error) {
+	collection := chi.URLParam(r, "collection")
+	id := chi.URLParam(r, "id")
+
+	// Build UPDATE query with policy clause
+	var setClauses []string
+	var values []any
+
+	for key, value := range payload {
+		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", key, len(values)+1))
+		values = append(values, value)
+	}
+
+	// Add updated_at
+	setClauses = append(setClauses, "updated_at = NOW()")
+
+	// Add WHERE clause parameters
+	values = append(values, policyResult.Params...)
+	values = append(values, id)
+
+	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s AND id = $%d", collection, strings.Join(setClauses, ", "), policyResult.SQLClause, len(values))
+
+	// Execute query
+	err := deps.DB.Exec(r.Context(), rc.AppName, query, values...)
+	if err != nil {
+		return nil, ErrInternal("Failed to update record")
+	}
+
+	// Return the updated record
+	return map[string]any{"id": id}, nil
 }
 
-func executePatchQuery(deps *Deps, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
-	// Placeholder: would execute PATCH query
-	return map[string]any{"id": "item-id"}, nil
+func executePatchQuery(deps *Deps, r *http.Request, rc *RequestContext, payload map[string]any, policyResult auth.PolicyResult) (any, error) {
+	// For PATCH, we use the same logic as UPDATE but only update provided fields
+	return executeUpdateQuery(deps, r, rc, payload, policyResult)
 }
 
-func executeDeleteQuery(deps *Deps, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
-	// Placeholder: would execute DELETE query
-	return nil, nil // No content for successful delete
+func executeDeleteQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
+	collection := chi.URLParam(r, "collection")
+	id := chi.URLParam(r, "id")
+
+	// Build DELETE query with policy clause
+	query := fmt.Sprintf("DELETE FROM %s WHERE %s AND id = $%d", collection, policyResult.SQLClause, len(policyResult.Params)+1)
+	args := append(policyResult.Params, id)
+
+	// Execute query
+	err := deps.DB.Exec(r.Context(), rc.AppName, query, args...)
+	if err != nil {
+		return nil, ErrInternal("Failed to delete record")
+	}
+
+	// No content for successful delete
+	return nil, nil
 }

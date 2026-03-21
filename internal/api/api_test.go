@@ -11,9 +11,11 @@ import (
 
 	"github.com/backd-dev/backd/internal/auth"
 	"github.com/backd-dev/backd/internal/config"
+	"github.com/backd-dev/backd/internal/db"
 	"github.com/backd-dev/backd/internal/functions"
 	"github.com/backd-dev/backd/internal/storage"
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Mock implementations for testing
@@ -83,11 +85,65 @@ func (m *mockAuth) EvaluatePolicy(ctx context.Context, appName, table, operation
 		SQLClause: "TRUE",
 		Params:    []any{},
 		Defaults:  make(map[string]string),
+		Columns:   []string{"*"}, // Allow all columns for testing
 		SoftCol:   "",
 	}, nil
 }
 
+func (m *mockAuth) ApplyDefaults(defaults map[string]string, rc *auth.RequestContext) map[string]any {
+	return make(map[string]any)
+}
+
 type mockDB struct{}
+
+func (m *mockDB) Provision(ctx context.Context, name string, dbType db.DBType) error {
+	return nil
+}
+
+func (m *mockDB) Bootstrap(ctx context.Context, name string, dbType db.DBType) error {
+	return nil
+}
+
+func (m *mockDB) Migrate(ctx context.Context, appName, migrationsPath string) error {
+	return nil
+}
+
+func (m *mockDB) Pool(name string) (*pgxpool.Pool, error) {
+	return nil, nil
+}
+
+func (m *mockDB) Exec(ctx context.Context, app, query string, args ...any) error {
+	return nil
+}
+
+func (m *mockDB) Query(ctx context.Context, app, query string, args ...any) ([]map[string]any, error) {
+	return []map[string]any{
+		{"id": "test-id", "name": "test-post"},
+	}, nil
+}
+
+func (m *mockDB) QueryOne(ctx context.Context, app, query string, args ...any) (map[string]any, error) {
+	return map[string]any{
+		"id":   "test-id",
+		"name": "test-post",
+	}, nil
+}
+
+func (m *mockDB) Tables(ctx context.Context, appName string) ([]db.TableInfo, error) {
+	return []db.TableInfo{}, nil
+}
+
+func (m *mockDB) Columns(ctx context.Context, appName, table string) ([]db.ColumnInfo, error) {
+	return []db.ColumnInfo{}, nil
+}
+
+func (m *mockDB) VerifyPublishableKey(ctx context.Context, appName, key string) error {
+	return nil
+}
+
+func (m *mockDB) EnsureSecretKey(ctx context.Context, appName string, s db.Secrets) error {
+	return nil
+}
 
 type mockFunctions struct{}
 
@@ -129,6 +185,7 @@ type mockSecrets struct{}
 // Helper function to create test dependencies
 func createTestDeps() *Deps {
 	return &Deps{
+		DB:              &mockDB{},
 		Auth:            &mockAuth{},
 		Storage:         &mockStorage{},
 		FunctionsClient: &mockFunctions{},
