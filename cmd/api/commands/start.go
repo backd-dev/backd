@@ -272,8 +272,14 @@ func startServices(serverCfg *config.ServerConfig, configSet *config.ConfigSet, 
 	router.Use(middleware.RequestID)
 	router.Use(middleware.Logger)
 	router.Use(middleware.Recoverer)
-	// TODO: Add metrics middleware when available
-	// TODO: Add auth middleware when available
+
+	// Add metrics middleware
+	router.Use(metrics.RequestMiddleware)
+
+	// Add auth middleware
+	if authInstance != nil {
+		router.Use(api.AuthMiddleware(authInstance))
+	}
 
 	// Create dependencies struct
 	deps := &api.Deps{
@@ -296,10 +302,25 @@ func startServices(serverCfg *config.ServerConfig, configSet *config.ConfigSet, 
 				deps.Storage = nil
 			}
 
-			// TODO: Register CRUD routes when api package is ready
-			// TODO: Register auth routes if not using domain auth
-			// TODO: Register storage routes if configured
-			// TODO: Register functions routes
+			// Register API routes for this app
+			router.Route(fmt.Sprintf("/v1/%s", appName), func(r chi.Router) {
+				// Register CRUD routes
+				api.RegisterCRUDRoutes(r, deps)
+
+				// Register auth routes (skip if auth.domain is set)
+				if appConfig := configSet.Apps[appName]; appConfig.Auth.Domain == "" {
+					api.RegisterAuthRoutes(r, deps)
+				}
+
+				// Register storage routes if configured
+				if deps.Storage != nil {
+					api.RegisterStorageRoutes(r, deps)
+				}
+
+				// Register functions routes
+				api.RegisterFunctionRoutes(r, deps)
+			})
+
 			slog.Info("routes registered for app", "app", appName)
 		} else {
 			// Register 503 catch-all for failed apps
@@ -354,16 +375,25 @@ func startServices(serverCfg *config.ServerConfig, configSet *config.ConfigSet, 
 
 	// Start metrics server on BACKD_METRICS_PORT
 	go func() {
-		metricsAddr := fmt.Sprintf(":%d", serverCfg.MetricsPort)
-		slog.Info("starting metrics server", "port", serverCfg.MetricsPort)
-		// TODO: Replace with actual metrics server when ready
-		metricsRouter := chi.NewRouter()
-		metricsRouter.Get("/health", func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintf(w, `{"status":"ok"}`)
-		})
-		if err := http.ListenAndServe(metricsAddr, metricsRouter); err != nil {
+		metricsCtx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		if err := metrics.StartMetricsServer(metricsCtx, serverCfg.MetricsPort, dbInstance); err != nil {
 			slog.Error("metrics server failed", "error", err)
+		}
+	}()
+
+	// Start internal router for Deno communication on 127.0.0.1:9191
+	go func() {
+		internalAddr := fmt.Sprintf("127.0.0.1:%d", serverCfg.InternalPort)
+		slog.Info("starting internal router", "port", serverCfg.InternalPort)
+		internalRouter := chi.NewRouter()
+
+		// Register internal routes (no auth middleware)
+		api.RegisterInternalRoutes(internalRouter, deps)
+
+		if err := http.ListenAndServe(internalAddr, internalRouter); err != nil {
+			slog.Error("internal router failed", "error", err)
 		}
 	}()
 

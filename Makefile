@@ -2,10 +2,11 @@
 
 # Build both binaries
 build:
+	mkdir -p build
 	@echo "Building backd CLI..."
-	go build ./cmd/backd
+	go build -o build/backd ./cmd/backd
 	@echo "Building API runtime..."
-	go build ./cmd/api
+	go build -o build/api ./cmd/api
 	@echo "Build complete."
 
 # Run unit tests
