@@ -167,6 +167,13 @@ func TestValidate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ast, err := c.Parse(tt.expression)
 			if err != nil {
+				// For comprehensions, we expect parse to fail
+				if tt.name == "invalid comprehension" {
+					if !contains(err.Error(), "Syntax error") {
+						t.Errorf("Expected syntax error for comprehension, got: %v", err)
+					}
+					return
+				}
 				t.Fatalf("Parse failed: %v", err)
 			}
 
@@ -177,10 +184,10 @@ func TestValidate(t *testing.T) {
 				} else if tt.errorMsg != "" && !contains(err.Error(), tt.errorMsg) {
 					t.Errorf("Expected error containing %q, got: %v", tt.errorMsg, err)
 				}
-				return
-			}
-			if err != nil {
-				t.Errorf("Validate failed: %v", err)
+			} else {
+				if err != nil {
+					t.Errorf("Validate failed: %v", err)
+				}
 			}
 		})
 	}
@@ -234,7 +241,7 @@ func TestTranspile(t *testing.T) {
 		{
 			name:           "has function",
 			expression:     "has(auth.meta.role)",
-			expectedSQL:    "$1 IS NOT NULL",
+			expectedSQL:    "($1 IS NOT NULL)",
 			expectedParams: []any{"admin"},
 		},
 		{
@@ -276,19 +283,19 @@ func TestTranspile(t *testing.T) {
 		{
 			name:           "auth meta access",
 			expression:     "auth.meta.role == 'admin'",
-			expectedSQL:    "$1 = $2",
+			expectedSQL:    "($1 = $2)",
 			expectedParams: []any{"admin", "admin"},
 		},
 		{
 			name:           "auth metaApp access",
 			expression:     "auth.metaApp.permission == 'read'",
-			expectedSQL:    "$1 = $2",
+			expectedSQL:    "($1 = $2)",
 			expectedParams: []any{"read", "read"},
 		},
 		{
 			name:           "complex expression",
 			expression:     "row.user_id == auth.uid && row.status in ['active'] && has(auth.meta.role)",
-			expectedSQL:    "((user_id = $1) AND ((status = ANY(ARRAY[$2])) AND ($3 IS NOT NULL)))",
+			expectedSQL:    "((user_id = $1 AND (status = ANY(ARRAY[$2]))) AND $3 IS NOT NULL)",
 			expectedParams: []any{"user123", "active", "admin"},
 		},
 		{

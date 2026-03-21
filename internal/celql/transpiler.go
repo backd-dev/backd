@@ -35,6 +35,11 @@ func (t *transpiler) transpile(ast *cel.Ast) (TranspileResult, error) {
 		return TranspileResult{}, err
 	}
 
+	// Wrap the expression in parentheses unless it's a NOT expression or already wrapped
+	if sql != "" && !strings.HasPrefix(sql, "(") && !strings.HasPrefix(sql, "NOT ") {
+		sql = fmt.Sprintf("(%s)", sql)
+	}
+
 	return TranspileResult{
 		SQL:    sql,
 		Params: t.params,
@@ -79,8 +84,14 @@ func (t *transpiler) transpileCall(call ast.CallExpr) (string, error) {
 	fnName := call.FunctionName()
 
 	// Handle binary operators
-	if len(fnName) > 2 && fnName[0] == '_' && fnName[len(fnName)-1] == '_' {
+	if len(fnName) > 2 && fnName[0] == '_' && fnName[len(fnName)-1] == '_' ||
+		len(fnName) > 1 && fnName[0] == '!' && fnName[1] == '_' {
 		return t.transpileBinaryOperator(call)
+	}
+
+	// Handle special function names from macros
+	if fnName == "@in" {
+		return t.transpileInOperator(call)
 	}
 
 	switch fnName {
@@ -118,8 +129,41 @@ func (t *transpiler) transpileCall(call ast.CallExpr) (string, error) {
 	}
 }
 
-// transpileSelect handles field access (row.field, auth.meta.field)
+// transpileSelect handles field/attribute access
 func (t *transpiler) transpileSelect(sel ast.SelectExpr) (string, error) {
+	// Handle presence tests (has() function calls)
+	if sel.IsTestOnly() {
+		// has(auth.meta.field) becomes field IS NOT NULL
+		// We need to get the actual value and check if it's not null
+		fieldName := sel.FieldName()
+		operand := sel.Operand()
+
+		// Check if this is auth.meta.field access
+		if operand.Kind() == ast.SelectKind {
+			operandSel := operand.AsSelect()
+			if operandIdent := operandSel.Operand().AsIdent(); operandIdent == "auth" {
+				if operandField := operandSel.FieldName(); operandField == "meta" || operandField == "metaApp" {
+					// This is auth.meta.field or auth.metaApp.field
+					var value any
+					if operandField == "meta" && t.auth.Meta != nil {
+						value = t.auth.Meta[fieldName]
+					} else if operandField == "metaApp" && t.auth.MetaApp != nil {
+						value = t.auth.MetaApp[fieldName]
+					}
+					param := t.addParam(value)
+					return fmt.Sprintf("%s IS NOT NULL", param), nil
+				}
+			}
+		}
+
+		// For other fields, just return the field name with IS NOT NULL
+		operandStr, err := t.walkNode(operand)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("%s.%s IS NOT NULL", operandStr, fieldName), nil
+	}
+
 	operand, err := t.walkNode(sel.Operand())
 	if err != nil {
 		return "", err
@@ -321,6 +365,21 @@ func (t *transpiler) addParam(value any) string {
 
 // transpileBinaryOperator handles binary operators like _==_, _!=_, etc.
 func (t *transpiler) transpileBinaryOperator(call ast.CallExpr) (string, error) {
+	// Handle unary operators like !_
+	if call.FunctionName() == "!_" || call.FunctionName() == "-_" {
+		if len(call.Args()) != 1 {
+			return "", fmt.Errorf("unary operator requires exactly one operand")
+		}
+		left, err := t.walkNode(call.Args()[0])
+		if err != nil {
+			return "", err
+		}
+		if call.FunctionName() == "!_" {
+			return fmt.Sprintf("NOT (%s)", left), nil
+		}
+		return fmt.Sprintf("-%s", left), nil
+	}
+
 	if len(call.Args()) != 2 {
 		return "", fmt.Errorf("binary operator requires exactly two operands")
 	}
@@ -349,17 +408,29 @@ func (t *transpiler) transpileBinaryOperator(call ast.CallExpr) (string, error) 
 
 	switch call.FunctionName() {
 	case operators.Equals:
-		return fmt.Sprintf("(%s = %s)", left, right), nil
+		// Handle null comparisons specially
+		if rightLiteral := call.Args()[1].AsLiteral(); rightLiteral != nil {
+			if val := rightLiteral.Value(); fmt.Sprintf("%v", val) == "NULL_VALUE" {
+				return fmt.Sprintf("%s IS NULL", left), nil
+			}
+		}
+		return fmt.Sprintf("%s = %s", left, right), nil
 	case operators.NotEquals:
-		return fmt.Sprintf("(%s != %s)", left, right), nil
+		// Handle null comparisons specially
+		if rightLiteral := call.Args()[1].AsLiteral(); rightLiteral != nil {
+			if val := rightLiteral.Value(); fmt.Sprintf("%v", val) == "NULL_VALUE" {
+				return fmt.Sprintf("%s IS NOT NULL", left), nil
+			}
+		}
+		return fmt.Sprintf("%s != %s", left, right), nil
 	case operators.Less:
-		return fmt.Sprintf("(%s < %s)", left, right), nil
+		return fmt.Sprintf("%s < %s", left, right), nil
 	case operators.LessEquals:
-		return fmt.Sprintf("(%s <= %s)", left, right), nil
+		return fmt.Sprintf("%s <= %s", left, right), nil
 	case operators.Greater:
-		return fmt.Sprintf("(%s > %s)", left, right), nil
+		return fmt.Sprintf("%s > %s", left, right), nil
 	case operators.GreaterEquals:
-		return fmt.Sprintf("(%s >= %s)", left, right), nil
+		return fmt.Sprintf("%s >= %s", left, right), nil
 	case operators.In:
 		// Check if right side is a list literal
 		if listExpr := call.Args()[1].AsList(); listExpr != nil {
@@ -373,16 +444,55 @@ func (t *transpiler) transpileBinaryOperator(call ast.CallExpr) (string, error) 
 				param := t.addParam(value)
 				elements = append(elements, param)
 			}
-			return fmt.Sprintf("(%s = ANY(ARRAY[%s]))", left, strings.Join(elements, ", ")), nil
+			return fmt.Sprintf("%s = ANY(ARRAY[%s])", left, strings.Join(elements, ", ")), nil
 		}
-		return fmt.Sprintf("(%s = ANY(%s))", left, right), nil
+		return fmt.Sprintf("%s = ANY(%s)", left, right), nil
 	case operators.LogicalAnd:
 		return fmt.Sprintf("(%s AND %s)", left, right), nil
 	case operators.LogicalOr:
+		// Check if we need to wrap individual conditions
+		leftNeedsWrap := !strings.HasPrefix(left, "(")
+		rightNeedsWrap := !strings.HasPrefix(right, "(")
+
+		if leftNeedsWrap {
+			left = fmt.Sprintf("(%s)", left)
+		}
+		if rightNeedsWrap {
+			right = fmt.Sprintf("(%s)", right)
+		}
+
+		// Always wrap the OR expression
 		return fmt.Sprintf("(%s OR %s)", left, right), nil
 	case operators.LogicalNot:
+		// For logical not, only one operand
+		if len(call.Args()) != 1 {
+			return "", fmt.Errorf("logical not requires exactly one operand")
+		}
+		left, err := t.walkNode(call.Args()[0])
+		if err != nil {
+			return "", err
+		}
 		return fmt.Sprintf("NOT (%s)", left), nil
 	default:
 		return "", fmt.Errorf("unsupported binary operator: %s", call.FunctionName())
 	}
+}
+
+// transpileInOperator handles the @in operator (from "in" keyword)
+func (t *transpiler) transpileInOperator(call ast.CallExpr) (string, error) {
+	if len(call.Args()) != 2 {
+		return "", fmt.Errorf("in operator requires exactly two operands")
+	}
+
+	left, err := t.walkNode(call.Args()[0])
+	if err != nil {
+		return "", err
+	}
+
+	right, err := t.walkNode(call.Args()[1])
+	if err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("(%s = ANY(%s))", left, right), nil
 }

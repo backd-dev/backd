@@ -79,8 +79,34 @@ func (v *validator) validateCall(call ast.CallExpr) error {
 	fnName := call.FunctionName()
 
 	// Binary operators like _==_, _!=_, etc. are handled in walkNode
-	if fnName == "" || len(fnName) > 2 && (fnName[0] == '_' && fnName[len(fnName)-1] == '_') {
+	// But reject arithmetic operators
+	if fnName == "" || (len(fnName) > 2 && (fnName[0] == '_' && fnName[len(fnName)-1] == '_')) ||
+		(len(fnName) > 1 && fnName[0] == '!' && fnName[1] == '_') {
+
+		// Reject arithmetic operators even though they're binary operators
+		if fnName == operators.Add || fnName == operators.Subtract || fnName == operators.Multiply ||
+			fnName == operators.Divide || fnName == operators.Modulo {
+			return v.errorf(call.Target(), "arithmetic operations are not supported", "unsupported operations are not allowed")
+		}
+
+		// Validate arguments for binary operators to catch invalid identifiers
+		for _, arg := range call.Args() {
+			if err := v.walkNode(arg); err != nil {
+				return err
+			}
+		}
+
 		return nil
+	}
+
+	// Handle special function names from macros
+	if fnName == "@in" {
+		return nil // Allow @in (from "in" operator)
+	}
+
+	// Check for method calls (has Target/Receiver)
+	if target := call.Target(); target != nil && target.Kind() == ast.SelectKind {
+		return v.errorf(target, "method calls are not supported", "use only supported operators and functions")
 	}
 
 	// Allow only specific functions
@@ -95,12 +121,10 @@ func (v *validator) validateCall(call ast.CallExpr) error {
 			if fnName == "has" && i == 0 {
 				if selectExpr := arg.AsSelect(); selectExpr != nil {
 					if !v.isAuthAccess(selectExpr) {
-						return v.errorf(arg, "has() can only be used on auth fields",
-							"use has(auth.meta.field) or has(auth.metaApp.field)")
+						return v.errorf(arg, "has() can only be used on auth fields", "use has() on auth.meta or auth.metaApp")
 					}
 				} else {
-					return v.errorf(arg, "has() requires an auth field selector",
-						"use has(auth.meta.field) or has(auth.metaApp.field)")
+					return v.errorf(arg, "has() requires an auth field selector", "use has(auth.meta.field) or has(auth.metaApp.field)")
 				}
 			}
 		}
@@ -113,17 +137,35 @@ func (v *validator) validateCall(call ast.CallExpr) error {
 // validateSelect validates field/attribute access
 func (v *validator) validateSelect(sel ast.SelectExpr) error {
 	// Validate the operand
-	if err := v.walkNode(sel.Operand()); err != nil {
-		return err
+	operand := sel.Operand()
+	if ident := operand.AsIdent(); ident != "" {
+		// Only allow row and auth as direct operands
+		switch ident {
+		case "row", "auth":
+			// Don't walk the operand - it would validate as a bare identifier
+		default:
+			return v.errorf(sel.Operand(), "field access on %q is not supported",
+				"use only row.field or auth.field")
+		}
+	} else {
+		// For nested selects, walk the operand
+		if err := v.walkNode(operand); err != nil {
+			return err
+		}
 	}
 
 	// Check for unsupported method calls
 	if sel.IsTestOnly() {
-		return v.errorf(sel.Operand(), "presence tests are not supported", "use has() function instead")
+		// Check if this is a has() function call on auth fields
+		// has(auth.meta.field) gets parsed as auth.meta.field? (presence test)
+		if v.isAuthAccess(sel) {
+			return nil // Allow has() on auth fields
+		}
+		// For non-auth fields, give a more specific error message
+		return v.errorf(sel.Operand(), "has() can only be used on auth fields", "use has() on auth.meta or auth.metaApp")
 	}
 
 	// Only allow dot notation on auth and row
-	operand := sel.Operand()
 	if ident := operand.AsIdent(); ident != "" {
 		switch ident {
 		case "row", "auth":
@@ -144,16 +186,17 @@ func (v *validator) validateSelect(sel ast.SelectExpr) error {
 	return v.errorf(sel.Operand(), "nested field access is not supported", "use only row.field or auth.field")
 }
 
-// validateIdent validates identifier references
+// validateIdent validates identifiers
 func (v *validator) validateIdent(ident string) error {
+	// Only allow specific identifiers
 	switch ident {
-	case "row", "auth":
-		return nil
 	case "true", "false":
 		return nil
+	case "row", "auth":
+		// These should only appear as operands in SelectExpr, not as bare identifiers
+		return v.errorf(nil, "bare identifier %q is not supported", ident)
 	default:
-		return v.errorf(nil, "identifier %q is not supported",
-			"use only row, auth, true, or false")
+		return v.errorf(nil, "identifier %q is not supported", "use only row.field, auth.field, or literals")
 	}
 }
 
