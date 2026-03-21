@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/backd-dev/backd/internal/auth"
@@ -192,7 +193,214 @@ func createTestDeps() *Deps {
 	}
 }
 
-// Test error constructors
+// Test stripColumns function
+func TestStripColumns(t *testing.T) {
+	tests := []struct {
+		name           string
+		payload        map[string]any
+		allowedColumns []string
+		expected       map[string]any
+	}{
+		{
+			name: "filter allowed columns",
+			payload: map[string]any{
+				"id":     "123",
+				"name":   "test",
+				"secret": "hidden",
+			},
+			allowedColumns: []string{"id", "name"},
+			expected: map[string]any{
+				"id":   "123",
+				"name": "test",
+			},
+		},
+		{
+			name: "allow all columns with wildcard",
+			payload: map[string]any{
+				"id":     "123",
+				"name":   "test",
+				"secret": "hidden",
+			},
+			allowedColumns: []string{"*"},
+			expected: map[string]any{
+				"id":     "123",
+				"name":   "test",
+				"secret": "hidden",
+			},
+		},
+		{
+			name:           "empty payload",
+			payload:        nil,
+			allowedColumns: []string{"id", "name"},
+			expected:       nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := stripColumns(tt.payload, tt.allowedColumns)
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Errorf("stripColumns() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+// Test filterResponseColumns function
+func TestFilterResponseColumns(t *testing.T) {
+	tests := []struct {
+		name           string
+		result         any
+		allowedColumns []string
+		expected       any
+	}{
+		{
+			name: "filter single record",
+			result: map[string]any{
+				"id":     "123",
+				"name":   "test",
+				"secret": "hidden",
+			},
+			allowedColumns: []string{"id", "name"},
+			expected: map[string]any{
+				"id":   "123",
+				"name": "test",
+			},
+		},
+		{
+			name: "filter paginated response",
+			result: map[string]any{
+				"data": []map[string]any{
+					{"id": "1", "name": "test1", "secret": "hidden1"},
+					{"id": "2", "name": "test2", "secret": "hidden2"},
+				},
+				"count":  2,
+				"limit":  10,
+				"offset": 0,
+			},
+			allowedColumns: []string{"id", "name"},
+			expected: map[string]any{
+				"data": []map[string]any{
+					{"id": "1", "name": "test1"},
+					{"id": "2", "name": "test2"},
+				},
+				"count":  2,
+				"limit":  10,
+				"offset": 0,
+			},
+		},
+		{
+			name:           "allow all columns with wildcard",
+			result:         []map[string]any{{"id": "1", "name": "test", "secret": "hidden"}},
+			allowedColumns: []string{"*"},
+			expected:       []map[string]any{{"id": "1", "name": "test", "secret": "hidden"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := filterResponseColumns(tt.result, tt.allowedColumns)
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Errorf("filterResponseColumns() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+// Test CRUD pipeline integration
+func TestCRUDPipeline(t *testing.T) {
+	deps := createTestDeps()
+
+	// Create a test router with CRUD routes
+	r := chi.NewRouter()
+	r.Route("/api/v1/{app}/data", func(r chi.Router) {
+		RegisterCRUDRoutes(r, deps)
+	})
+
+	tests := []struct {
+		name           string
+		method         string
+		path           string
+		body           interface{}
+		expectedStatus int
+	}{
+		{
+			name:           "create record",
+			method:         "POST",
+			path:           "/api/v1/testapp/data/posts",
+			body:           map[string]any{"title": "Test Post", "content": "Test Content"},
+			expectedStatus: 200,
+		},
+		{
+			name:           "list records",
+			method:         "GET",
+			path:           "/api/v1/testapp/data/posts",
+			expectedStatus: 200,
+		},
+		{
+			name:           "get single record",
+			method:         "GET",
+			path:           "/api/v1/testapp/data/posts/test-id",
+			expectedStatus: 200,
+		},
+		{
+			name:           "update record",
+			method:         "PUT",
+			path:           "/api/v1/testapp/data/posts/test-id",
+			body:           map[string]any{"title": "Updated Post"},
+			expectedStatus: 200,
+		},
+		{
+			name:           "patch record",
+			method:         "PATCH",
+			path:           "/api/v1/testapp/data/posts/test-id",
+			body:           map[string]any{"content": "Patched Content"},
+			expectedStatus: 200,
+		},
+		{
+			name:           "delete record",
+			method:         "DELETE",
+			path:           "/api/v1/testapp/data/posts/test-id",
+			expectedStatus: 204,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var req *http.Request
+			if tt.body != nil {
+				body, _ := json.Marshal(tt.body)
+				req = httptest.NewRequest(tt.method, tt.path, bytes.NewBuffer(body))
+				req.Header.Set("Content-Type", "application/json")
+			} else {
+				req = httptest.NewRequest(tt.method, tt.path, nil)
+			}
+			req.Header.Set("X-Session", "test-session")
+
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			if tt.expectedStatus == 204 {
+				if w.Code != tt.expectedStatus {
+					t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
+				}
+			} else {
+				if w.Code != tt.expectedStatus {
+					t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
+				}
+
+				var response map[string]any
+				if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+					t.Errorf("Failed to unmarshal response: %v", err)
+				}
+
+				if response["error"] != nil {
+					t.Errorf("Unexpected error in response: %v", response["error"])
+				}
+			}
+		})
+	}
+}
 func TestErrorConstructors(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -43,6 +43,14 @@ func ErrForbidden(detail string) *BackdError {
 	}
 }
 
+func ErrTooManyRequests(detail string) *BackdError {
+	return &BackdError{
+		Code:       "TOO_MANY_REQUESTS",
+		Detail:     detail,
+		StatusCode: http.StatusTooManyRequests,
+	}
+}
+
 func ErrNotFound(detail string) *BackdError {
 	return &BackdError{
 		Code:       "NOT_FOUND",

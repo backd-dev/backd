@@ -135,8 +135,9 @@ func makeCRUDHandler(deps *Deps, operation CRUDOperation) Handler {
 		}
 
 		// Step 7: ResolveFiles → __file UUID → FileDescriptor
-		// This would integrate with storage package to resolve file references
-		// Placeholder implementation
+		if operation == OP_LIST || operation == OP_GET || operation == OP_CREATE {
+			result = resolveFiles(deps, r, rc, result)
+		}
 
 		// Step 8: WriteResponse → writeList or writeSuccess
 		// This is handled by the Handler wrapper
@@ -183,6 +184,47 @@ func filterResponseColumns(result any, allowedColumns []string) any {
 	}
 }
 
+// resolveFiles converts __file UUIDs to FileDescriptor objects
+func resolveFiles(deps *Deps, r *http.Request, rc *RequestContext, result any) any {
+	if deps.Storage == nil {
+		return result // No storage configured, return as-is
+	}
+
+	switch v := result.(type) {
+	case map[string]any:
+		// Check if this is a paginated response with data array
+		if data, exists := v["data"]; exists {
+			if dataSlice, ok := data.([]map[string]any); ok {
+				// Use storage.ResolveFiles for batch resolution
+				resolved, err := deps.Storage.ResolveFiles(r.Context(), rc.AppName, dataSlice)
+				if err != nil {
+					// If resolution fails, return original data
+					return result
+				}
+				v["data"] = resolved
+				return v
+			}
+		}
+		// Otherwise treat as single record
+		single := []map[string]any{v}
+		resolved, err := deps.Storage.ResolveFiles(r.Context(), rc.AppName, single)
+		if err == nil && len(resolved) > 0 {
+			return resolved[0]
+		}
+		return v
+	case []map[string]any:
+		// Array of records
+		resolved, err := deps.Storage.ResolveFiles(r.Context(), rc.AppName, v)
+		if err != nil {
+			// If resolution fails, return original data
+			return result
+		}
+		return resolved
+	default:
+		return result
+	}
+}
+
 // filterSingleRecord filters a single record based on allowed columns
 func filterSingleRecord(record map[string]any, allowed map[string]bool) map[string]any {
 	if record == nil {
@@ -200,6 +242,13 @@ func filterSingleRecord(record map[string]any, allowed map[string]bool) map[stri
 func stripColumns(payload map[string]any, allowedColumns []string) map[string]any {
 	if payload == nil || len(allowedColumns) == 0 {
 		return payload
+	}
+
+	// Check if wildcard is present
+	for _, col := range allowedColumns {
+		if col == "*" {
+			return payload // Return original payload if wildcard is present
+		}
 	}
 
 	// Create a set of allowed columns for efficient lookup
