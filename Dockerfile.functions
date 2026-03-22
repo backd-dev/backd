@@ -1,5 +1,5 @@
 # Multi-stage build for backd functions service
-FROM golang:1.26.1-alpine AS go-builder
+FROM docker.io/library/golang:1.26.1-alpine AS go-builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates tzdata
@@ -17,10 +17,10 @@ RUN go mod download
 COPY . .
 
 # Build the API binary
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o api ./cmd/api
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-extldflags=-static" -a -installsuffix cgo -o api ./cmd/api
 
 # Runtime stage: Deno with Go binary
-FROM denoland/deno:2.0-alpine
+FROM docker.io/denoland/deno:alpine-2.7.7
 
 # Install ca-certificates
 RUN apk add --no-cache ca-certificates

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"os"
+	"strings"
 
 	"github.com/backd-dev/backd/internal/config"
 	"github.com/fernandezvara/commandkit"
@@ -10,29 +11,13 @@ import (
 // getServerConfigFromContext extracts environment variables from commandkit context
 // and creates ServerConfig, ensuring all env vars go through ServerConfig
 func getServerConfigFromContext(ctx *commandkit.CommandContext) *config.ServerConfig {
-	// Build environment map from commandkit context or fallback to os.Getenv
+	// Build environment map from all environment variables for env substitution
 	env := make(map[string]string)
 
-	// List all required environment variables
-	envVars := []string{
-		"BACKD_ENCRYPTION_KEY",
-		"DATABASE_URL",
-		"BACKD_API_PORT",
-		"BACKD_FUNCTIONS_PORT",
-		"BACKD_METRICS_PORT",
-		"BACKD_INTERNAL_PORT",
-		"BACKD_FUNCTIONS_URL",
-		"BACKD_LOG_LEVEL",
-		"BACKD_LOG_FORMAT",
-		"BACKD_DENO_MIN_WORKERS",
-		"BACKD_DENO_MAX_WORKERS",
-		"BACKD_DENO_IDLE_TIMEOUT",
-		"BACKD_JOB_POLL_INTERVAL",
-	}
-
-	for _, envVar := range envVars {
-		if value := os.Getenv(envVar); value != "" {
-			env[envVar] = value
+	// Copy all environment variables to ensure ${VAR} substitution works for any variable
+	for _, envVar := range os.Environ() {
+		if key, value, found := strings.Cut(envVar, "="); found {
+			env[key] = value
 		}
 	}
 

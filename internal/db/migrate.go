@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
@@ -245,9 +246,10 @@ func (db *dbImpl) EnsureSecretKey(ctx context.Context, appName string, secrets S
 		return fmt.Errorf("failed to generate secret key: %w", err)
 	}
 
-	// Store the secret key (this should be encrypted, but for now we'll store as is)
-	// In a real implementation, this would use the secrets package to encrypt the key
-	_, err = pool.Exec(ctx, "INSERT INTO _secrets (name, value_encrypted) VALUES ($1, $2)", "secret_key", string(key))
+	// Store the secret key encoded as base64 to avoid UTF8 encoding issues
+	// TODO: In a real implementation, this would use the secrets package to encrypt the key
+	keyBase64 := base64.StdEncoding.EncodeToString(key)
+	_, err = pool.Exec(ctx, "INSERT INTO _secrets (name, value_encrypted) VALUES ($1, $2)", "secret_key", keyBase64)
 	if err != nil {
 		return fmt.Errorf("failed to store secret key: %w", err)
 	}

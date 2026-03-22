@@ -48,7 +48,15 @@ var FunctionsFunc func(ctx *commandkit.CommandContext) error = func(ctx *command
 	}
 
 	// Phase 2: Load and validate configurations
-	configSet, err := config.LoadAll(configDir, nil)
+	// Build environment map for substitution
+	env := make(map[string]string)
+	for _, envVar := range os.Environ() {
+		if key, value, found := strings.Cut(envVar, "="); found {
+			env[key] = value
+		}
+	}
+
+	configSet, err := config.LoadAll(configDir, env)
 	if err != nil {
 		slog.Error("failed to load configurations", "error", err)
 		os.Exit(1)

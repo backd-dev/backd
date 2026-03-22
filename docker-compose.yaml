@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   postgres:
-    image: postgres:16-alpine
+    image: docker.io/library/postgres:16-alpine
     container_name: backd-postgres
     environment:
       POSTGRES_DB: backd_platform
@@ -19,7 +19,7 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    image: docker.io/minio/minio:latest
     container_name: backd-minio
     environment:
       MINIO_ROOT_USER: minioadmin
@@ -32,18 +32,19 @@ services:
     command: server /data --console-address ":9001"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
+      interval: 10s
+      timeout: 2s
       retries: 3
 
   minio-init:
-    image: minio/mc:latest
+    image: docker.io/minio/mc:latest
     container_name: backd-minio-init
     depends_on:
       minio:
         condition: service_healthy
     entrypoint: >
       /bin/sh -c "
+      /usr/bin/sleep 15;
       /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin123;
       /usr/bin/mc mb myminio/backd-apps --ignore-existing;
       /usr/bin/mc mb myminio/backd-functions --ignore-existing;
@@ -53,15 +54,15 @@ services:
       "
 
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile.api
+    image: backd_api:debug
     container_name: backd-api
     environment:
-      BACKD_ENCRYPTION_KEY: test-encryption-key-32-chars-long
+      BACKD_ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1jaGFycy1sb25n
       DATABASE_URL: postgres://backd:backd123@postgres:5432/backd_platform
       BACKD_FUNCTIONS_URL: http://functions:8081
       LOG_LEVEL: debug
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
     ports:
       - "8080:8080"
     depends_on:
@@ -69,23 +70,23 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
-    command: ["./api", "start", "--config-dir", "/apps"]
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
+    volumes:
+      - ./testdata/apps:/apps:ro
+    entrypoint: ["/app/api"]
+    command: ["start", "--config-dir", "/apps"]
+    
   functions:
     build:
       context: .
       dockerfile: Dockerfile.functions
     container_name: backd-functions
     environment:
-      BACKD_ENCRYPTION_KEY: test-encryption-key-32-chars-long
+      BACKD_ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1jaGFycy1sb25n
       DATABASE_URL: postgres://backd:backd123@postgres:5432/backd_platform
       BACKD_INTERNAL_URL: http://localhost:9191
       LOG_LEVEL: debug
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
     ports:
       - "8081:8081"
       - "9191:9191"
@@ -94,28 +95,32 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-
+    volumes:
+      - ./testdata/apps:/apps:ro
+    entrypoint: ["/app/api"]
+    command: ["functions", "--config-dir", "/apps"]
+    
   worker:
     build:
       context: .
       dockerfile: Dockerfile.functions
     container_name: backd-worker
     environment:
-      BACKD_ENCRYPTION_KEY: test-encryption-key-32-chars-long
+      BACKD_ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1jaGFycy1sb25n
       DATABASE_URL: postgres://backd:backd123@postgres:5432/backd_platform
       BACKD_INTERNAL_URL: http://localhost:9191
       LOG_LEVEL: debug
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
     depends_on:
       postgres:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
-    command: ["./api", "functions", "--mode", "worker"]
+    volumes:
+      - ./testdata/apps:/apps:ro
+    entrypoint: ["/app/api"]
+    command: ["functions", "--config-dir", "/apps", "--mode", "worker"]
 
 volumes:
   pgdata:

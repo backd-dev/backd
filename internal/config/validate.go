@@ -112,6 +112,11 @@ func validName(s string) bool {
 	return nameRegex.MatchString(s)
 }
 
+// validColumnName checks if a string is a valid column name (allows * for all columns)
+func validColumnName(s string) bool {
+	return s == "*" || nameRegex.MatchString(s)
+}
+
 // validateDatabaseConfig validates database configuration
 func validateDatabaseConfig(db *DatabaseConfig, result *ValidationResult) {
 	// Check if either DSN or individual fields are provided
@@ -201,8 +206,8 @@ func validatePolicies(policies map[string]TablePolicies, result *ValidationResul
 
 			// Validate column names
 			for _, col := range policy.Columns {
-				if !validName(col) {
-					result.AddError(fmt.Sprintf("%s.columns", fieldPrefix), "invalid column name", fmt.Sprintf("'%s' must start with lowercase letter, contain only lowercase letters, numbers, and underscores", col))
+				if !validColumnName(col) {
+					result.AddError(fmt.Sprintf("%s.columns", fieldPrefix), "invalid column name", fmt.Sprintf("'%s' must be '*' or start with lowercase letter, contain only lowercase letters, numbers, and underscores", col))
 				}
 			}
 		}
