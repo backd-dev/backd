@@ -1,0 +1,11 @@
+{
+  "name": "@backd/js",
+  "version": "0.1.0",
+  "exports": {
+    ".": "./src/index.ts",
+    "./deno": "./src/deno.ts"
+  },
+  "tasks": {
+    "check": "deno check src/index.ts src/deno.ts"
+  }
+}
