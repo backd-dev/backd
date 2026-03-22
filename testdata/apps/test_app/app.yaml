@@ -1,0 +1,64 @@
+name: test_app
+description: "E2E test application"
+
+database:
+  # Uses server default DATABASE_URL
+
+auth:
+  domain: "test_domain"
+  session_expiry: "24h"
+  allow_registration: true
+
+keys:
+  publishable_key: "pk_test_e2e_key_1234567890abcdef"
+
+storage:
+  endpoint: "http://localhost:9000"
+  region: "us-east-1"
+  bucket: "backd-apps"
+  access_key_id: "${MINIO_ACCESS_KEY}"
+  secret_access_key: "${MINIO_SECRET_KEY}"
+
+jobs:
+  max_attempts: 3
+  timeout: "15s"
+
+policies:
+  posts:
+    select:
+      expression: "true"
+      columns: ["*"]
+    insert:
+      expression: "true"
+    update:
+      expression: "true"
+    delete:
+      expression: "true"
+
+  orders:
+    select:
+      expression: "auth.uid == row.user_id"
+      columns: ["id", "user_id", "total", "status", "created_at"]
+      defaults:
+        user_id: "auth.uid"
+        created_at: "now()"
+      soft: "deleted_at"
+    insert:
+      expression: "true"
+      defaults:
+        user_id: "auth.uid"
+    update:
+      expression: "auth.uid == row.user_id"
+    delete:
+      expression: "auth.uid == row.user_id"
+
+  products:
+    select:
+      expression: "true"
+      columns: ["*"]
+    insert:
+      expression: "true"
+
+secrets:
+  minio_access: "${MINIO_ACCESS_KEY}"
+  minio_secret: "${MINIO_SECRET_KEY}"

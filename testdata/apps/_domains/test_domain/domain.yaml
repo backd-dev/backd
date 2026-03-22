@@ -1,0 +1,10 @@
+name: test_domain
+description: "E2E test authentication domain"
+
+provider: password
+
+session_expiry: "24h"
+allow_registration: true
+
+database:
+  # Uses server default DATABASE_URL
