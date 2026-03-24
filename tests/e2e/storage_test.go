@@ -25,7 +25,7 @@ func TestStorage_Upload(t *testing.T) {
 	_, _ = part.Write([]byte("hello world"))
 	_ = writer.Close()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL()+"/storage/upload", &buf)
+	req, err := http.NewRequestWithContext(ctx, "POST", storageURL()+"/upload", &buf)
 	if err != nil {
 		t.Fatalf("create request: %v", err)
 	}
