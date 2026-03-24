@@ -189,6 +189,35 @@ func applyMigration(ctx context.Context, pool *pgxpool.Pool, file MigrationFile)
 	return nil
 }
 
+// UpsertPublishableKey stores or updates the publishable key for an app
+func (db *dbImpl) UpsertPublishableKey(ctx context.Context, appName, key string) error {
+	pool, err := db.Pool(appName)
+	if err != nil {
+		return fmt.Errorf("failed to get pool for app %s: %w", appName, err)
+	}
+
+	// Check if key already exists
+	var count int
+	err = pool.QueryRow(ctx, "SELECT COUNT(*) FROM _api_keys WHERE app_name = $1 AND type = 'publishable'", appName).Scan(&count)
+	if err != nil {
+		return fmt.Errorf("failed to query publishable key: %w", err)
+	}
+
+	if count == 0 {
+		// Insert new key
+		keyID := NewXID()
+		_, err = pool.Exec(ctx,
+			"INSERT INTO _api_keys (id, app_name, key_hash, type, created_at, updated_at) VALUES ($1, $2, $3, 'publishable', NOW(), NOW())",
+			keyID, appName, key)
+		if err != nil {
+			return fmt.Errorf("failed to insert publishable key: %w", err)
+		}
+		slog.Info("publishable key stored", "app", appName)
+	}
+
+	return nil
+}
+
 // VerifyPublishableKey checks if the publishable key in the database matches the provided key
 func (db *dbImpl) VerifyPublishableKey(ctx context.Context, appName, key string) error {
 	pool, err := db.Pool(appName)

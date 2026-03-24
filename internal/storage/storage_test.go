@@ -62,6 +62,11 @@ func (m *MockDB) Columns(ctx context.Context, appName, table string) ([]db.Colum
 	return args.Get(0).([]db.ColumnInfo), args.Error(1)
 }
 
+func (m *MockDB) UpsertPublishableKey(ctx context.Context, appName, key string) error {
+	args := m.Called(ctx, appName, key)
+	return args.Error(0)
+}
+
 func (m *MockDB) VerifyPublishableKey(ctx context.Context, appName, key string) error {
 	args := m.Called(ctx, appName, key)
 	return args.Error(0)

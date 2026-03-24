@@ -100,6 +100,12 @@ func (a *authImpl) EvaluatePolicy(ctx context.Context, appName, table, operation
 
 	policy := a.cache.policies[key]
 
+	// If the policy expression references auth.* and the user is not authenticated,
+	// deny access immediately rather than producing a vacuously-true/empty SQL clause.
+	if !rc.Authenticated && policy.Expression != "true" && strings.Contains(policy.Expression, "auth.") {
+		return PolicyResult{}, fmt.Errorf("auth.EvaluatePolicy: authentication required")
+	}
+
 	// Build auth context for CEL evaluation
 	authContext := celql.AuthContext{
 		UID:           rc.UID,

@@ -61,6 +61,10 @@ func (m *mockDB) Columns(ctx context.Context, appName, table string) ([]db.Colum
 	return nil, nil
 }
 
+func (m *mockDB) UpsertPublishableKey(ctx context.Context, appName, key string) error {
+	return nil
+}
+
 func (m *mockDB) VerifyPublishableKey(ctx context.Context, appName, key string) error {
 	return nil
 }
@@ -98,7 +102,7 @@ func TestNewAuth(t *testing.T) {
 	db := newMockDB()
 	celql := newMockCELQL()
 
-	auth := NewAuth(db, celql)
+	auth := NewAuth(db, celql, nil)
 	if auth == nil {
 		t.Fatal("NewAuth returned nil")
 	}
@@ -226,7 +230,7 @@ func TestPasswordHashingConsistency(t *testing.T) {
 }
 
 func TestLoadPolicies(t *testing.T) {
-	auth := NewAuth(newMockDB(), newMockCELQL())
+	auth := NewAuth(newMockDB(), newMockCELQL(), nil)
 
 	cfg := &config.AppConfig{
 		Policies: map[string]config.TablePolicies{
@@ -249,7 +253,7 @@ func TestLoadPolicies(t *testing.T) {
 }
 
 func TestEvaluatePolicy(t *testing.T) {
-	auth := NewAuth(newMockDB(), newMockCELQL())
+	auth := NewAuth(newMockDB(), newMockCELQL(), nil)
 
 	// Load policies first
 	cfg := &config.AppConfig{
@@ -290,7 +294,7 @@ func TestEvaluatePolicy(t *testing.T) {
 }
 
 func TestEvaluatePolicySecretKey(t *testing.T) {
-	auth := NewAuth(newMockDB(), newMockCELQL())
+	auth := NewAuth(newMockDB(), newMockCELQL(), nil)
 
 	rc := &RequestContext{
 		UID:           "user-123",
@@ -312,7 +316,7 @@ func TestEvaluatePolicySecretKey(t *testing.T) {
 }
 
 func TestApplyDefaults(t *testing.T) {
-	auth := NewAuth(newMockDB(), newMockCELQL())
+	auth := NewAuth(newMockDB(), newMockCELQL(), nil)
 
 	rc := &RequestContext{
 		UID: "user-123",

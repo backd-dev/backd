@@ -2,6 +2,8 @@ package auth
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -104,21 +106,43 @@ type Auth interface {
 
 // authImpl implements the Auth interface
 type authImpl struct {
-	db    db.DB
-	celql celql.CELQL
-	cache *PolicyCache
+	db     db.DB
+	celql  celql.CELQL
+	cache  *PolicyCache
+	config *config.ConfigSet
 }
 
 // NewAuth creates a new Auth instance
-func NewAuth(database db.DB, celql celql.CELQL) Auth {
+func NewAuth(database db.DB, celql celql.CELQL, cfg *config.ConfigSet) Auth {
 	return &authImpl{
-		db:    database,
-		celql: celql,
+		db:     database,
+		celql:  celql,
+		config: cfg,
 		cache: &PolicyCache{
 			programs: make(map[policyKey]*cel.Ast),
 			policies: make(map[policyKey]*config.PolicyEntry),
 		},
 	}
+}
+
+// resolveAuthDB returns the database name to use for auth operations.
+// If the app has auth.domain set, returns the domain name; otherwise returns the app name.
+func (a *authImpl) resolveAuthDB(appName string) string {
+	if a.config != nil {
+		if appCfg, ok := a.config.GetApp(appName); ok && appCfg.Auth.Domain != "" {
+			return appCfg.Auth.Domain
+		}
+	}
+	return appName
+}
+
+// generateSecureToken generates a cryptographically random hex token.
+func generateSecureToken(nBytes int) (string, error) {
+	b := make([]byte, nBytes)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // Register creates a new user account
@@ -127,9 +151,11 @@ func (a *authImpl) Register(ctx context.Context, appName, username, password str
 		return nil, fmt.Errorf("username and password cannot be empty")
 	}
 
+	authDB := a.resolveAuthDB(appName)
+
 	// Check if user already exists
 	checkQuery := `SELECT id FROM _users WHERE username = $1`
-	existing, err := a.db.QueryOne(ctx, appName, checkQuery, username)
+	existing, err := a.db.QueryOne(ctx, authDB, checkQuery, username)
 	if err != nil {
 		slog.Error("failed to check existing user", "app", appName, "username", username, "error", err)
 		return nil, fmt.Errorf("auth.Register: %w", err)
@@ -153,7 +179,7 @@ func (a *authImpl) Register(ctx context.Context, appName, username, password str
 		INSERT INTO _users (id, username, password_hash, type, metadata, created_at, updated_at)
 		VALUES ($1, $2, $3, 'user', '{}', NOW(), NOW())`
 
-	err = a.db.Exec(ctx, appName, insertQuery, userID, username, passwordHash)
+	err = a.db.Exec(ctx, authDB, insertQuery, userID, username, passwordHash)
 	if err != nil {
 		slog.Error("failed to create user", "app", appName, "username", username, "error", err)
 		return nil, fmt.Errorf("auth.Register: %w", err)
@@ -178,9 +204,11 @@ func (a *authImpl) UpdateUsername(ctx context.Context, appName, userID, username
 		return fmt.Errorf("userID and username cannot be empty")
 	}
 
+	authDB := a.resolveAuthDB(appName)
+
 	// Check if username is already taken by another user
 	checkQuery := `SELECT id FROM _users WHERE username = $1 AND id <> $2`
-	existing, err := a.db.QueryOne(ctx, appName, checkQuery, username, userID)
+	existing, err := a.db.QueryOne(ctx, authDB, checkQuery, username, userID)
 	if err != nil {
 		slog.Error("failed to check username availability", "app", appName, "username", username, "error", err)
 		return fmt.Errorf("auth.UpdateUsername: %w", err)
@@ -197,7 +225,7 @@ func (a *authImpl) UpdateUsername(ctx context.Context, appName, userID, username
 		SET username = $1, updated_at = NOW()
 		WHERE id = $2`
 
-	err = a.db.Exec(ctx, appName, updateQuery, username, userID)
+	err = a.db.Exec(ctx, authDB, updateQuery, username, userID)
 	if err != nil {
 		slog.Error("failed to update username", "app", appName, "user_id", userID, "username", username, "error", err)
 		return fmt.Errorf("auth.UpdateUsername: %w", err)
@@ -213,6 +241,8 @@ func (a *authImpl) UpdatePassword(ctx context.Context, appName, userID, password
 		return fmt.Errorf("userID and password cannot be empty")
 	}
 
+	authDB := a.resolveAuthDB(appName)
+
 	// Hash new password
 	passwordHash, err := HashPassword(password)
 	if err != nil {
@@ -226,7 +256,7 @@ func (a *authImpl) UpdatePassword(ctx context.Context, appName, userID, password
 		SET password_hash = $1, updated_at = NOW()
 		WHERE id = $2`
 
-	err = a.db.Exec(ctx, appName, updateQuery, passwordHash, userID)
+	err = a.db.Exec(ctx, authDB, updateQuery, passwordHash, userID)
 	if err != nil {
 		slog.Error("failed to update password", "app", appName, "user_id", userID, "error", err)
 		return fmt.Errorf("auth.UpdatePassword: %w", err)
@@ -247,7 +277,9 @@ func (a *authImpl) GetUser(ctx context.Context, appName, userID string) (*User, 
 		FROM _users
 		WHERE id = $1`
 
-	row, err := a.db.QueryOne(ctx, appName, query, userID)
+	authDB := a.resolveAuthDB(appName)
+
+	row, err := a.db.QueryOne(ctx, authDB, query, userID)
 	if err != nil {
 		slog.Error("failed to get user", "app", appName, "user_id", userID, "error", err)
 		return nil, fmt.Errorf("auth.GetUser: %w", err)

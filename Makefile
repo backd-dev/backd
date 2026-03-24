@@ -53,6 +53,11 @@ docker-down:
 	@echo "Stopping development stack ($(COMPOSE_CMD))..."
 	$(COMPOSE_CMD) down
 
+# Logs development stack
+docker-logs:
+	@echo "Logs development stack ($(COMPOSE_CMD))..."
+	$(COMPOSE_CMD) logs -f
+
 # Check TypeScript SDK
 sdk-check:
 	@echo "Checking TypeScript SDK..."

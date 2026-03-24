@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: docker.io/library/postgres:16-alpine
@@ -54,7 +52,9 @@ services:
       "
 
   api:
-    image: backd_api:debug
+    build:
+      context: .
+      dockerfile: Dockerfile.api
     container_name: backd-api
     environment:
       BACKD_ENCRYPTION_KEY: dGVzdC1lbmNyeXB0aW9uLWtleS0zMi1jaGFycy1sb25n
@@ -62,9 +62,10 @@ services:
       BACKD_FUNCTIONS_URL: http://functions:8081
       LOG_LEVEL: debug
       MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
     ports:
       - "8080:8080"
+      - "9191:9191"
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,6 +73,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - ./testdata/apps:/apps:ro
+    restart: on-failure
     entrypoint: ["/app/api"]
     command: ["start", "--config-dir", "/apps"]
     
@@ -86,10 +88,9 @@ services:
       BACKD_INTERNAL_URL: http://localhost:9191
       LOG_LEVEL: debug
       MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
     ports:
       - "8081:8081"
-      - "9191:9191"
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,6 +98,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - ./testdata/apps:/apps:ro
+    restart: on-failure
     entrypoint: ["/app/api"]
     command: ["functions", "--config-dir", "/apps"]
     
@@ -111,7 +113,7 @@ services:
       BACKD_INTERNAL_URL: http://localhost:9191
       LOG_LEVEL: debug
       MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin123
     depends_on:
       postgres:
         condition: service_healthy
@@ -119,6 +121,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - ./testdata/apps:/apps:ro
+    restart: on-failure
     entrypoint: ["/app/api"]
     command: ["functions", "--config-dir", "/apps", "--mode", "worker"]
 

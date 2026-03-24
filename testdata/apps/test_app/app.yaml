@@ -13,7 +13,7 @@ keys:
   publishable_key: "pk_test_e2e_key_1234567890abcdef"
 
 storage:
-  endpoint: "http://localhost:9000"
+  endpoint: "http://minio:9000"
   region: "us-east-1"
   bucket: "backd-apps"
   access_key_id: "${MINIO_ACCESS_KEY}"
@@ -53,6 +53,13 @@ policies:
       expression: "auth.uid == row.user_id"
 
   products:
+    select:
+      expression: "true"
+      columns: ["*"]
+    insert:
+      expression: "true"
+
+  items:
     select:
       expression: "true"
       columns: ["*"]

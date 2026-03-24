@@ -42,6 +42,7 @@ type DB interface {
 	QueryOne(ctx context.Context, app, query string, args ...any) (map[string]any, error)
 	Tables(ctx context.Context, appName string) ([]TableInfo, error)
 	Columns(ctx context.Context, appName, table string) ([]ColumnInfo, error)
+	UpsertPublishableKey(ctx context.Context, appName, key string) error
 	VerifyPublishableKey(ctx context.Context, appName, key string) error
 	EnsureSecretKey(ctx context.Context, appName string, s Secrets) error
 }
@@ -86,7 +87,9 @@ func (db *dbImpl) resolveAppDSN(appName string) (string, error) {
 	case cfg.Host != "":
 		return buildAppDSN(cfg, appName), nil
 	case db.serverCfg != nil && db.serverCfg.DatabaseURL != "":
-		return db.serverCfg.DatabaseURL, nil
+		// Replace the database name in the platform DSN with the app-specific name
+		dbName := fmt.Sprintf("backd_%s", appName)
+		return replaceDatabaseName(db.serverCfg.DatabaseURL, dbName), nil
 	default:
 		return "", fmt.Errorf("no database config for app %s", appName)
 	}
@@ -110,7 +113,9 @@ func (db *dbImpl) resolveDomainDSN(domainName string) (string, error) {
 	case cfg.Host != "":
 		return buildDomainDSN(cfg, domainName), nil
 	case db.serverCfg != nil && db.serverCfg.DatabaseURL != "":
-		return db.serverCfg.DatabaseURL, nil
+		// Replace the database name in the platform DSN with the domain-specific name
+		dbName := fmt.Sprintf("backd_domain_%s", domainName)
+		return replaceDatabaseName(db.serverCfg.DatabaseURL, dbName), nil
 	default:
 		return "", fmt.Errorf("no database config for domain %s", domainName)
 	}

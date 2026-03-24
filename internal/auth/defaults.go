@@ -14,6 +14,8 @@ func (a *authImpl) SetGlobalMeta(ctx context.Context, appName, userID, key strin
 		return fmt.Errorf("userID and key cannot be empty")
 	}
 
+	authDB := a.resolveAuthDB(appName)
+
 	// Build JSON path for global metadata: {_,key}
 	path := fmt.Sprintf("{_,%s}", strings.ReplaceAll(key, `"`, `\"`))
 
@@ -41,7 +43,7 @@ func (a *authImpl) SetGlobalMeta(ctx context.Context, appName, userID, key strin
 		args = []any{path, string(valueJSON), userID}
 	}
 
-	err := a.db.Exec(ctx, appName, query, args...)
+	err := a.db.Exec(ctx, authDB, query, args...)
 	if err != nil {
 		slog.Error("failed to set global metadata", "app", appName, "user_id", userID, "key", key, "error", err)
 		return fmt.Errorf("auth.SetGlobalMeta: %w", err)
@@ -56,6 +58,8 @@ func (a *authImpl) SetAppMeta(ctx context.Context, appName, userID, key string, 
 	if userID == "" || key == "" {
 		return fmt.Errorf("userID and key cannot be empty")
 	}
+
+	authDB := a.resolveAuthDB(appName)
 
 	// Build JSON path for app-specific metadata: {appName,key}
 	path := fmt.Sprintf("{%s,%s}", appName, strings.ReplaceAll(key, `"`, `\"`))
@@ -84,7 +88,7 @@ func (a *authImpl) SetAppMeta(ctx context.Context, appName, userID, key string, 
 		args = []any{path, string(valueJSON), userID}
 	}
 
-	err := a.db.Exec(ctx, appName, query, args...)
+	err := a.db.Exec(ctx, authDB, query, args...)
 	if err != nil {
 		slog.Error("failed to set app metadata", "app", appName, "user_id", userID, "key", key, "error", err)
 		return fmt.Errorf("auth.SetAppMeta: %w", err)

@@ -138,6 +138,10 @@ func (m *mockDB) Columns(ctx context.Context, appName, table string) ([]db.Colum
 	return []db.ColumnInfo{}, nil
 }
 
+func (m *mockDB) UpsertPublishableKey(ctx context.Context, appName, key string) error {
+	return nil
+}
+
 func (m *mockDB) VerifyPublishableKey(ctx context.Context, appName, key string) error {
 	return nil
 }

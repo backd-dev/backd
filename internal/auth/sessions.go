@@ -18,13 +18,15 @@ var (
 
 // SignIn creates a new user session
 func (a *authImpl) SignIn(ctx context.Context, appName, domainName, username, password string) (*Session, error) {
+	authDB := a.resolveAuthDB(appName)
+
 	// Find user by username
 	query := `
 		SELECT id, username, password_hash, metadata, created_at, updated_at
 		FROM _users
 		WHERE username = $1`
 
-	row, err := a.db.QueryOne(ctx, appName, query, username)
+	row, err := a.db.QueryOne(ctx, authDB, query, username)
 	if err != nil {
 		slog.Error("failed to query user", "app", appName, "username", username, "error", err)
 		return nil, fmt.Errorf("auth.SignIn: %w", err)
@@ -44,19 +46,28 @@ func (a *authImpl) SignIn(ctx context.Context, appName, domainName, username, pa
 
 	userID := row["id"].(string)
 
-	// Generate session ID and token
+	// Generate session ID and cryptographically random token
 	sessionID := db.NewXID()
-	sessionToken := db.NewXID()
+	sessionToken, err := generateSecureToken(32)
+	if err != nil {
+		return nil, fmt.Errorf("auth.SignIn: %w", err)
+	}
 
-	// Calculate expiry time
-	expiresAt := time.Now().Add(24 * time.Hour) // TODO: get from config
+	// Calculate expiry time from config
+	expiry := 24 * time.Hour
+	if a.config != nil {
+		if appCfg, ok := a.config.GetApp(appName); ok && appCfg.Auth.SessionExpiry > 0 {
+			expiry = appCfg.Auth.SessionExpiry
+		}
+	}
+	expiresAt := time.Now().Add(expiry)
 
 	// Create session
 	insertQuery := `
 		INSERT INTO _sessions (id, user_id, app_name, token, created_at, expires_at)
 		VALUES ($1, $2, $3, $4, NOW(), $5)`
 
-	err = a.db.Exec(ctx, appName, insertQuery, sessionID, userID, appName, sessionToken, expiresAt)
+	err = a.db.Exec(ctx, authDB, insertQuery, sessionID, userID, appName, sessionToken, expiresAt)
 	if err != nil {
 		slog.Error("failed to create session", "app", appName, "user_id", userID, "error", err)
 		return nil, fmt.Errorf("auth.SignIn: %w", err)
@@ -77,9 +88,33 @@ func (a *authImpl) SignIn(ctx context.Context, appName, domainName, username, pa
 
 // SignOut invalidates a user session
 func (a *authImpl) SignOut(ctx context.Context, token string) error {
+	// We need to find which DB the session lives in. Try all domains first, then apps.
 	query := `DELETE FROM _sessions WHERE token = $1`
 
-	err := a.db.Exec(ctx, "", query, token) // Use empty app name since sessions are global
+	// Try each domain DB
+	if a.config != nil {
+		for domainName := range a.config.Domains {
+			err := a.db.Exec(ctx, domainName, query, token)
+			if err == nil {
+				slog.Info("session deleted", "domain", domainName)
+				return nil
+			}
+		}
+		// Try each app DB
+		for appName := range a.config.Apps {
+			if a.config.Apps[appName].Auth.Domain != "" {
+				continue // Skip apps that use domain auth
+			}
+			err := a.db.Exec(ctx, appName, query, token)
+			if err == nil {
+				slog.Info("session deleted", "app", appName)
+				return nil
+			}
+		}
+	}
+
+	// Fallback: try with empty name (will likely fail but preserves old behavior)
+	err := a.db.Exec(ctx, "", query, token)
 	if err != nil {
 		slog.Error("failed to delete session", "token", token, "error", err)
 		return fmt.Errorf("auth.SignOut: %w", err)
@@ -97,10 +132,30 @@ func (a *authImpl) ValidateSession(ctx context.Context, token string) (*RequestC
 		JOIN _users u ON s.user_id = u.id
 		WHERE s.token = $1`
 
-	row, err := a.db.QueryOne(ctx, "", query, token) // Use empty app name since sessions are global
-	if err != nil {
-		slog.Error("failed to query session", "token", token, "error", err)
-		return nil, fmt.Errorf("auth.ValidateSession: %w", err)
+	// Search all domain and app DBs for the session
+	var row map[string]any
+	var err error
+
+	if a.config != nil {
+		// Try domain DBs first
+		for domainName := range a.config.Domains {
+			row, err = a.db.QueryOne(ctx, domainName, query, token)
+			if err == nil && row != nil {
+				break
+			}
+		}
+		// Try app DBs if not found in domains
+		if row == nil {
+			for appName := range a.config.Apps {
+				if a.config.Apps[appName].Auth.Domain != "" {
+					continue // Skip apps that use domain auth
+				}
+				row, err = a.db.QueryOne(ctx, appName, query, token)
+				if err == nil && row != nil {
+					break
+				}
+			}
+		}
 	}
 
 	if row == nil {

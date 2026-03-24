@@ -14,17 +14,29 @@ import (
 	"github.com/backd-dev/backd/internal/db"
 )
 
-// detectContentType detects the MIME type from the first bytes and returns
-// both the detected type and a new reader that replays those bytes.
+// detectContentType detects the MIME type from the first bytes.
+// If the body is seekable, it seeks back to start after sniffing.
+// Otherwise it prepends the sniffed bytes back via MultiReader.
 func detectContentType(body io.Reader) (string, io.Reader) {
 	buffer := make([]byte, 512)
 	n, err := body.Read(buffer)
 	if err != nil || n == 0 {
+		// Seek back if possible
+		if rs, ok := body.(io.ReadSeeker); ok {
+			rs.Seek(0, io.SeekStart)
+		}
 		return "application/octet-stream", body
 	}
 
 	contentType := http.DetectContentType(buffer[:n])
-	// Reassemble: prepend the sniffed bytes back onto the stream
+
+	// If the body supports seeking, seek back to start — preserves seekability for S3 SDK
+	if rs, ok := body.(io.ReadSeeker); ok {
+		rs.Seek(0, io.SeekStart)
+		return contentType, body
+	}
+
+	// Fallback: reassemble with MultiReader (not seekable)
 	reassembled := io.MultiReader(
 		strings.NewReader(string(buffer[:n])),
 		body,

@@ -83,12 +83,8 @@ func AuthMiddleware(authService auth.Auth) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			rc := RequestContextFrom(r.Context())
 
-			// Extract app name from URL parameter
+			// Extract app name from URL parameter (may be empty for domain auth routes)
 			rc.AppName = chi.URLParam(r, "app")
-			if rc.AppName == "" {
-				writeError(w, ErrBadRequest("MISSING_APP", "App name required in URL"))
-				return
-			}
 
 			// Try session authentication first (X-Session header or backd_session cookie)
 			sessionToken := r.Header.Get("X-Session")
@@ -111,8 +107,8 @@ func AuthMiddleware(authService auth.Auth) func(http.Handler) http.Handler {
 				}
 			}
 
-			// If no valid session, try API key authentication
-			if !rc.Authenticated {
+			// If no valid session, try API key authentication (only when app is known)
+			if !rc.Authenticated && rc.AppName != "" {
 				// Check for publishable key
 				publishableKey := r.Header.Get("X-Publishable-Key")
 				if publishableKey != "" {

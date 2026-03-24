@@ -61,6 +61,22 @@ const (
 	OP_DELETE CRUDOperation = "DELETE"
 )
 
+// policyOperation maps CRUD operations to RLS policy operation names (as defined in app.yaml)
+func policyOperation(op CRUDOperation) string {
+	switch op {
+	case OP_LIST, OP_GET:
+		return "select"
+	case OP_CREATE:
+		return "insert"
+	case OP_UPDATE, OP_PATCH:
+		return "update"
+	case OP_DELETE:
+		return "delete"
+	default:
+		return strings.ToLower(string(op))
+	}
+}
+
 // makeCRUDHandler creates a handler for the specified CRUD operation
 // This implements the 8-step CRUD pipeline
 func makeCRUDHandler(deps *Deps, operation CRUDOperation) Handler {
@@ -74,7 +90,7 @@ func makeCRUDHandler(deps *Deps, operation CRUDOperation) Handler {
 		// Step 2: EvaluatePolicy → sqlClause, params, defaults
 		// This would integrate with auth package's EvaluatePolicy method
 		// For now, placeholder implementation
-		policyResult, err := deps.Auth.EvaluatePolicy(r.Context(), rc.AppName, chi.URLParam(r, "collection"), string(operation), &auth.RequestContext{
+		policyResult, err := deps.Auth.EvaluatePolicy(r.Context(), rc.AppName, chi.URLParam(r, "collection"), policyOperation(operation), &auth.RequestContext{
 			UID:           rc.UserID,
 			Meta:          rc.Meta,
 			MetaApp:       rc.MetaApp,
@@ -281,24 +297,19 @@ func stripColumns(payload map[string]any, allowedColumns []string) map[string]an
 	return filtered
 }
 
-// Placeholder query execution functions
-// These would be fully implemented with actual database queries
-
-func executeListQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
-	collection, err := sanitizeIdentifier(chi.URLParam(r, "collection"))
-	if err != nil {
-		return nil, ErrBadRequest("INVALID_COLLECTION", err.Error())
-	}
-
-	// Start building WHERE parts and params from the RLS policy
-	whereParts := []string{policyResult.SQLClause}
+func buildWhereClause(policyResult auth.PolicyResult, qp *QueryParams) (string, []any, error) {
+	whereParts := []string{}
 	args := append([]any{}, policyResult.Params...)
+
+	if policyResult.SQLClause != "" && policyResult.SQLClause != "TRUE" {
+		whereParts = append(whereParts, policyResult.SQLClause)
+	}
 
 	// Integrate filterql for user-supplied where clause
 	if len(qp.Where) > 0 {
 		filterClause, filterParams, err := filterql.Transpile(qp.Where)
 		if err != nil {
-			return nil, ErrBadRequest("INVALID_WHERE", err.Error())
+			return "", nil, ErrBadRequest("INVALID_WHERE", err.Error())
 		}
 		if filterClause != "" {
 			whereParts = append(whereParts, filterClause)
@@ -306,14 +317,35 @@ func executeListQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *Query
 		}
 	}
 
-	fullWhere := strings.Join(whereParts, " AND ")
+	// Add soft delete exclusion if configured
+	if policyResult.SoftCol != "" {
+		whereParts = append(whereParts, fmt.Sprintf("%s IS NULL", policyResult.SoftCol))
+	}
+
+	if len(whereParts) == 0 {
+		return "TRUE", args, nil
+	}
+	return strings.Join(whereParts, " AND "), args, nil
+}
+
+func executeListQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
+	collection, err := sanitizeIdentifier(chi.URLParam(r, "collection"))
+	if err != nil {
+		return nil, ErrBadRequest("INVALID_COLLECTION", err.Error())
+	}
+
+	fullWhere, args, err := buildWhereClause(policyResult, qp)
+	if err != nil {
+		return nil, err
+	}
+
 	query := fmt.Sprintf("SELECT * FROM %s WHERE %s", collection, fullWhere)
 
-	// Add ORDER BY clause (sanitize each field)
+	// Add ORDER BY clause
 	if len(qp.Order) > 0 {
 		var orderParts []string
 		for _, o := range qp.Order {
-			orderParts = append(orderParts, o) // TODO: validate order fields
+			orderParts = append(orderParts, o)
 		}
 		query += " ORDER BY " + strings.Join(orderParts, ", ")
 	}
@@ -321,14 +353,16 @@ func executeListQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *Query
 	// Add LIMIT and OFFSET
 	query += fmt.Sprintf(" LIMIT %d OFFSET %d", qp.Limit, qp.Offset)
 
-	// Execute query
 	rows, err := deps.DB.Query(r.Context(), rc.AppName, query, args...)
 	if err != nil {
 		return nil, ErrInternal("Database query failed")
 	}
+	if rows == nil {
+		rows = []map[string]any{}
+	}
 
 	// Get total count for pagination
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", collection, fullWhere)
+	countQuery := fmt.Sprintf("SELECT COUNT(*) AS count FROM %s WHERE %s", collection, fullWhere)
 	countResult, err := deps.DB.QueryOne(r.Context(), rc.AppName, countQuery, args...)
 	if err != nil {
 		return nil, ErrInternal("Failed to get total count")
@@ -341,7 +375,6 @@ func executeListQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *Query
 		}
 	}
 
-	// Return paginated response
 	return map[string]any{
 		"data":   rows,
 		"count":  count,
@@ -357,33 +390,45 @@ func executeCreateQuery(deps *Deps, r *http.Request, rc *RequestContext, payload
 	}
 	id := db.NewXID()
 
-	// Build INSERT query with policy clause
-	// Get column names and values from payload
 	var columns []string
 	var values []any
 	var placeholders []string
 
+	// Add generated id
+	columns = append(columns, "id")
+	values = append(values, id)
+	placeholders = append(placeholders, fmt.Sprintf("$%d", len(values)))
+
+	// Add payload fields
 	for key, value := range payload {
+		if key == "id" {
+			continue // Skip user-provided id
+		}
 		columns = append(columns, key)
 		values = append(values, value)
 		placeholders = append(placeholders, fmt.Sprintf("$%d", len(values)))
 	}
 
-	// Add ID and created_at
-	columns = append(columns, "id", "created_at")
-	values = append(values, id, "NOW()")
-	placeholders = append(placeholders, fmt.Sprintf("$%d", len(values)), "NOW()")
+	// Add created_at as SQL expression (not a parameter)
+	columns = append(columns, "created_at")
+	placeholders = append(placeholders, "NOW()")
 
-	query := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s)", collection, strings.Join(columns, ", "), strings.Join(placeholders, ", "))
+	query := fmt.Sprintf(
+		"INSERT INTO %s (%s) VALUES (%s) RETURNING *",
+		collection,
+		strings.Join(columns, ", "),
+		strings.Join(placeholders, ", "),
+	)
 
-	// Execute query
-	err = deps.DB.Exec(r.Context(), rc.AppName, query, values...)
+	row, err := deps.DB.QueryOne(r.Context(), rc.AppName, query, values...)
 	if err != nil {
 		return nil, ErrInternal("Failed to create record")
 	}
+	if row == nil {
+		return map[string]any{"id": id}, nil
+	}
 
-	// Return the created record
-	return map[string]any{"id": id}, nil
+	return row, nil
 }
 
 func executeGetQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *QueryParams, policyResult auth.PolicyResult) (any, error) {
@@ -393,13 +438,27 @@ func executeGetQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *QueryP
 	}
 	id := chi.URLParam(r, "id")
 
-	// Build SELECT query with policy clause
-	query := fmt.Sprintf("SELECT * FROM %s WHERE %s AND id = $%d", collection, policyResult.SQLClause, len(policyResult.Params)+1)
-	args := append(policyResult.Params, id)
+	// Build WHERE parts
+	whereParts := []string{}
+	args := append([]any{}, policyResult.Params...)
 
-	// Execute query
+	if policyResult.SQLClause != "" && policyResult.SQLClause != "TRUE" {
+		whereParts = append(whereParts, policyResult.SQLClause)
+	}
+	if policyResult.SoftCol != "" {
+		whereParts = append(whereParts, fmt.Sprintf("%s IS NULL", policyResult.SoftCol))
+	}
+
+	// Add id condition
+	args = append(args, id)
+	whereParts = append(whereParts, fmt.Sprintf("id = $%d", len(args)))
+
+	query := fmt.Sprintf("SELECT * FROM %s WHERE %s", collection, strings.Join(whereParts, " AND "))
 	result, err := deps.DB.QueryOne(r.Context(), rc.AppName, query, args...)
 	if err != nil {
+		return nil, ErrInternal("Database query failed")
+	}
+	if result == nil {
 		return nil, ErrNotFound("Record not found")
 	}
 
@@ -413,36 +472,52 @@ func executeUpdateQuery(deps *Deps, r *http.Request, rc *RequestContext, payload
 	}
 	id := chi.URLParam(r, "id")
 
-	// Build UPDATE query with policy clause
+	// Build SET clause — params start at $1
 	var setClauses []string
 	var values []any
 
 	for key, value := range payload {
-		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", key, len(values)+1))
+		if key == "id" || key == "created_at" {
+			continue // Skip immutable fields
+		}
 		values = append(values, value)
+		setClauses = append(setClauses, fmt.Sprintf("%s = $%d", key, len(values)))
 	}
-
-	// Add updated_at
 	setClauses = append(setClauses, "updated_at = NOW()")
 
-	// Add WHERE clause parameters
+	if len(setClauses) == 1 {
+		return nil, ErrBadRequest("EMPTY_PAYLOAD", "No fields to update")
+	}
+
+	// Build WHERE clause — params continue after SET params
+	whereParts := []string{}
 	values = append(values, policyResult.Params...)
+	if policyResult.SQLClause != "" && policyResult.SQLClause != "TRUE" {
+		whereParts = append(whereParts, policyResult.SQLClause)
+	}
+
 	values = append(values, id)
+	whereParts = append(whereParts, fmt.Sprintf("id = $%d", len(values)))
 
-	query := fmt.Sprintf("UPDATE %s SET %s WHERE %s AND id = $%d", collection, strings.Join(setClauses, ", "), policyResult.SQLClause, len(values))
+	query := fmt.Sprintf(
+		"UPDATE %s SET %s WHERE %s RETURNING *",
+		collection,
+		strings.Join(setClauses, ", "),
+		strings.Join(whereParts, " AND "),
+	)
 
-	// Execute query
-	err = deps.DB.Exec(r.Context(), rc.AppName, query, values...)
+	row, err := deps.DB.QueryOne(r.Context(), rc.AppName, query, values...)
 	if err != nil {
 		return nil, ErrInternal("Failed to update record")
 	}
+	if row == nil {
+		return nil, ErrNotFound("Record not found")
+	}
 
-	// Return the updated record
-	return map[string]any{"id": id}, nil
+	return row, nil
 }
 
 func executePatchQuery(deps *Deps, r *http.Request, rc *RequestContext, payload map[string]any, policyResult auth.PolicyResult) (any, error) {
-	// For PATCH, we use the same logic as UPDATE but only update provided fields
 	return executeUpdateQuery(deps, r, rc, payload, policyResult)
 }
 
@@ -453,16 +528,30 @@ func executeDeleteQuery(deps *Deps, r *http.Request, rc *RequestContext, qp *Que
 	}
 	id := chi.URLParam(r, "id")
 
-	// Build DELETE query with policy clause
-	query := fmt.Sprintf("DELETE FROM %s WHERE %s AND id = $%d", collection, policyResult.SQLClause, len(policyResult.Params)+1)
-	args := append(policyResult.Params, id)
+	// Build WHERE clause
+	whereParts := []string{}
+	args := append([]any{}, policyResult.Params...)
 
-	// Execute query
-	err = deps.DB.Exec(r.Context(), rc.AppName, query, args...)
+	if policyResult.SQLClause != "" && policyResult.SQLClause != "TRUE" {
+		whereParts = append(whereParts, policyResult.SQLClause)
+	}
+
+	args = append(args, id)
+	whereParts = append(whereParts, fmt.Sprintf("id = $%d", len(args)))
+
+	whereClause := strings.Join(whereParts, " AND ")
+
+	// Soft delete: UPDATE deleted_at instead of DELETE
+	if policyResult.SoftCol != "" {
+		query := fmt.Sprintf("UPDATE %s SET %s = NOW() WHERE %s", collection, policyResult.SoftCol, whereClause)
+		err = deps.DB.Exec(r.Context(), rc.AppName, query, args...)
+	} else {
+		query := fmt.Sprintf("DELETE FROM %s WHERE %s", collection, whereClause)
+		err = deps.DB.Exec(r.Context(), rc.AppName, query, args...)
+	}
 	if err != nil {
 		return nil, ErrInternal("Failed to delete record")
 	}
 
-	// No content for successful delete
 	return nil, nil
 }

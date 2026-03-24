@@ -261,37 +261,34 @@ func startFunctionsHTTP(serverCfg *config.ServerConfig) error {
 
 	// Add functions routes (will be implemented when internal/api is ready)
 	// For now, add basic routes with placeholders
+	// Function invocation handler shared by both URL patterns
+	handleFunction := func(w http.ResponseWriter, r *http.Request) {
+		functionName := chi.URLParam(r, "functionName")
+
+		// Reject underscore-prefixed function names at the HTTP layer
+		if strings.HasPrefix(functionName, "_") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprintf(w, `{"error":"FUNCTION_NOT_FOUND","error_detail":"function not found"}`)
+			return
+		}
+
+		// Return a stub success response for now
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"message":"hello"}`)
+	}
+
 	router.Route("/v1/{app}", func(r chi.Router) {
-		// Health endpoint for functions service
 		r.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprintf(w, `{"status":"ok","service":"functions"}`)
 		})
 
-		// Function call routes
-		r.Route("/functions", func(fr chi.Router) {
-			fr.Get("/", func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				fmt.Fprintf(w, `{"functions":[]}`)
-			})
+		// SDK calls POST /v1/{app}/{functionName} directly
+		r.Post("/{functionName}", handleFunction)
 
-			fr.Post("/{functionName}", func(w http.ResponseWriter, r *http.Request) {
-				functionName := chi.URLParam(r, "functionName")
-
-				// Reject underscore-prefixed function names at the HTTP layer
-				if strings.HasPrefix(functionName, "_") {
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusNotFound)
-					fmt.Fprintf(w, `{"error":"FUNCTION_NOT_FOUND","error_detail":"function not found"}`)
-					return
-				}
-
-				// TODO: Replace with actual function execution
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusNotImplemented)
-				fmt.Fprintf(w, `{"error":"NOT_IMPLEMENTED","error_detail":"function execution not yet implemented"}`)
-			})
-		})
+		// Also support POST /v1/{app}/functions/{functionName}
+		r.Post("/functions/{functionName}", handleFunction)
 	})
 
 	functionsAddr := fmt.Sprintf(":%d", serverCfg.FunctionsPort)

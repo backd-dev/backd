@@ -1,6 +1,9 @@
 package api
 
 import (
+	"bytes"
+	"io"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -38,18 +41,26 @@ func handleFileUpload(deps *Deps) Handler {
 		}
 		defer file.Close()
 
-		// Upload file using storage package
-		uploadedFile, err := deps.Storage.Upload(r.Context(), rc.AppName, header.Filename, false, file)
+		// Buffer into bytes.Reader so S3 SDK can seek for payload hashing
+		data, err := io.ReadAll(file)
 		if err != nil {
-			return nil, ErrInternal("Failed to upload file")
+			return nil, ErrInternal("Failed to read uploaded file")
+		}
+		body := bytes.NewReader(data)
+
+		// Upload file using storage package
+		uploadedFile, err := deps.Storage.Upload(r.Context(), rc.AppName, header.Filename, false, body)
+		if err != nil {
+			slog.Error("file upload failed", "app", rc.AppName, "filename", header.Filename, "error", err)
+			return nil, ErrInternal("Failed to upload file: " + err.Error())
 		}
 
 		// Return file descriptor
 		return map[string]any{
-			"id":     uploadedFile.ID,
-			"name":   uploadedFile.Filename,
-			"size":   uploadedFile.Size,
-			"secure": uploadedFile.Secure,
+			"id":       uploadedFile.ID,
+			"filename": uploadedFile.Filename,
+			"size":     uploadedFile.Size,
+			"secure":   uploadedFile.Secure,
 		}, nil
 	}
 }

@@ -5,16 +5,23 @@ import (
 	"net/http"
 )
 
+// writeJSON writes any value as JSON with the given status code
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
 // writeSuccess writes a single data response
 // Response format: { "data": {...} }
 func writeSuccess(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	
+
 	response := map[string]any{
 		"data": data,
 	}
-	
+
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -23,14 +30,14 @@ func writeSuccess(w http.ResponseWriter, data any) {
 func writeList(w http.ResponseWriter, data []map[string]any, count int, limit, offset int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	
+
 	response := map[string]any{
 		"data":   data,
 		"count":  count,
 		"limit":  limit,
 		"offset": offset,
 	}
-	
+
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -44,12 +51,12 @@ func writeNoContent(w http.ResponseWriter) {
 func writeError(w http.ResponseWriter, err *BackdError) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(err.StatusCode)
-	
+
 	response := map[string]string{
-		"error":         err.Code,
-		"error_detail":  err.Detail,
+		"error":        err.Code,
+		"error_detail": err.Detail,
 	}
-	
+
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -60,7 +67,7 @@ func writeHandlerError(w http.ResponseWriter, err error) {
 		writeError(w, backdErr)
 		return
 	}
-	
+
 	// Convert unknown errors to internal errors
 	writeError(w, ErrInternal("An unexpected error occurred"))
 }

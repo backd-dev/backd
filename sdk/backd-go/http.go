@@ -79,9 +79,22 @@ func request[T any](ctx context.Context, h *httpClient, opts requestOptions) (T,
 
 	resp, err := h.client.Do(req)
 	if err != nil {
-		// Retry once on network error
+		// Retry once on network error — rebuild request so body is fresh
 		time.Sleep(500 * time.Millisecond)
-		resp, err = h.client.Do(req)
+		var retryBody io.Reader
+		if bodyReader != nil {
+			retryBody = bodyReader
+			if br, ok := bodyReader.(*bytes.Reader); ok {
+				br.Seek(0, io.SeekStart)
+				retryBody = br
+			}
+		}
+		req2, err2 := http.NewRequestWithContext(ctx, opts.method, reqURL, retryBody)
+		if err2 != nil {
+			return zero, &NetworkError{BackdError: BackdError{Code: "NETWORK_ERROR", Detail: err.Error()}}
+		}
+		req2.Header = req.Header
+		resp, err = h.client.Do(req2)
 		if err != nil {
 			return zero, &NetworkError{BackdError: BackdError{Code: "NETWORK_ERROR", Detail: err.Error()}}
 		}

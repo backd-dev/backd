@@ -218,7 +218,12 @@ func provisionApp(ctx context.Context, dbInstance db.DB, secretsInstance secrets
 		return "", fmt.Errorf("migration failed: %w", err)
 	}
 
-	// Verify publishable key
+	// Upsert publishable key (stores on first run, no-op if exists)
+	if err := dbInstance.UpsertPublishableKey(ctx, appName, appConfig.Keys.PublishableKey); err != nil {
+		return "", fmt.Errorf("publishable key upsert failed: %w", err)
+	}
+
+	// Verify publishable key matches stored value
 	if err := dbInstance.VerifyPublishableKey(ctx, appName, appConfig.Keys.PublishableKey); err != nil {
 		return "", fmt.Errorf("publishable key verification failed: %w", err)
 	}
@@ -242,8 +247,19 @@ func provisionApp(ctx context.Context, dbInstance db.DB, secretsInstance secrets
 }
 
 func startServices(serverCfg *config.ServerConfig, configSet *config.ConfigSet, dbInstance db.DB, secretsInstance secrets.Secrets, celqlInstance celql.CELQL, appStatus map[string]string, mode string) error {
-	authInstance := auth.NewAuth(dbInstance, celqlInstance)
+	authInstance := auth.NewAuth(dbInstance, celqlInstance, configSet)
 	functionsClient := functions.NewHTTPClient(serverCfg.FunctionsURL)
+
+	// Load RLS policies into auth cache for all ready apps
+	for appName, status := range appStatus {
+		if status == "ready" {
+			if appCfg, ok := configSet.GetApp(appName); ok {
+				if err := authInstance.LoadPolicies(context.Background(), appName, appCfg); err != nil {
+					slog.Error("failed to load policies into auth cache", "app", appName, "error", err)
+				}
+			}
+		}
+	}
 
 	// Create metrics instance
 	metricsInstance := metrics.NewMetrics()
@@ -284,30 +300,41 @@ func startServices(serverCfg *config.ServerConfig, configSet *config.ConfigSet, 
 	// Register routes for ready apps
 	for appName, status := range appStatus {
 		if status == "ready" {
-			// Set storage for this app if available
-			if storage, exists := storageInstances[appName]; exists {
-				deps.Storage = storage
-			} else {
-				deps.Storage = nil
-			}
+			appName := appName // capture for closure
 
 			// Register API routes for this app
 			router.Route(fmt.Sprintf("/v1/%s", appName), func(r chi.Router) {
+				// Inject AppName into RequestContext (route is literal, not {app} param)
+				r.Use(func(next http.Handler) http.Handler {
+					return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+						rc := api.RequestContextFrom(req.Context())
+						rc.AppName = appName
+						ctx := api.WithRequestContext(req.Context(), rc)
+						next.ServeHTTP(w, req.WithContext(ctx))
+					})
+				})
+
+				// Set per-app storage in a copy of deps
+				appDeps := *deps
+				if st, exists := storageInstances[appName]; exists {
+					appDeps.Storage = st
+				}
+
 				// Register CRUD routes
-				api.RegisterCRUDRoutes(r, deps)
+				api.RegisterCRUDRoutes(r, &appDeps)
 
 				// Register auth routes (skip if auth.domain is set)
 				if appConfig := configSet.Apps[appName]; appConfig.Auth.Domain == "" {
-					api.RegisterAuthRoutes(r, deps)
+					api.RegisterAuthRoutes(r, &appDeps)
 				}
 
 				// Register storage routes if configured
-				if deps.Storage != nil {
-					api.RegisterStorageRoutes(r, deps)
+				if appDeps.Storage != nil {
+					api.RegisterStorageRoutes(r, &appDeps)
 				}
 
 				// Register functions routes
-				api.RegisterFunctionRoutes(r, deps)
+				api.RegisterFunctionRoutes(r, &appDeps)
 			})
 
 			slog.Info("routes registered for app", "app", appName)
@@ -316,6 +343,40 @@ func startServices(serverCfg *config.ServerConfig, configSet *config.ConfigSet, 
 			registerFailedAppRoutes(router, appName, status)
 			slog.Info("503 routes registered for failed app", "app", appName, "reason", status)
 		}
+	}
+
+	// Register domain auth routes at /v1/_auth/{domain}/...
+	// These routes use the domain name as the AppName context so auth operations
+	// route to the domain DB via resolveAuthDB.
+	for domainName := range configSet.Domains {
+		domainName := domainName // capture
+		// Find an app that uses this domain (for context)
+		domainAppName := ""
+		for appName, appCfg := range configSet.Apps {
+			if appCfg.Auth.Domain == domainName {
+				domainAppName = appName
+				break
+			}
+		}
+		if domainAppName == "" {
+			slog.Warn("domain has no associated app, skipping auth routes", "domain", domainName)
+			continue
+		}
+
+		appNameForDomain := domainAppName // capture
+		router.Route(fmt.Sprintf("/v1/_auth/%s", domainName), func(r chi.Router) {
+			// Inject AppName into request context for domain auth routes
+			r.Use(func(next http.Handler) http.Handler {
+				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					rc := api.RequestContextFrom(req.Context())
+					rc.AppName = appNameForDomain
+					ctx := api.WithRequestContext(req.Context(), rc)
+					next.ServeHTTP(w, req.WithContext(ctx))
+				})
+			})
+			api.RegisterDomainAuthRoutes(r, deps)
+		})
+		slog.Info("domain auth routes registered", "domain", domainName, "app", appNameForDomain)
 	}
 
 	// Add health check endpoint
@@ -383,7 +444,7 @@ func startServices(serverCfg *config.ServerConfig, configSet *config.ConfigSet, 
 
 	// Start internal router for Deno communication on 127.0.0.1:9191
 	go func() {
-		internalAddr := fmt.Sprintf("127.0.0.1:%d", serverCfg.InternalPort)
+		internalAddr := fmt.Sprintf("0.0.0.0:%d", serverCfg.InternalPort)
 		slog.Info("starting internal router", "port", serverCfg.InternalPort)
 		internalRouter := chi.NewRouter()
 

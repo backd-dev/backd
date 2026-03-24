@@ -8,25 +8,28 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// RegisterAuthRoutes registers authentication routes
+// RegisterAuthRoutes registers authentication routes nested under /auth
 func RegisterAuthRoutes(r chi.Router, deps *Deps) {
-	// Auth routes: /api/v1/{app}/auth
 	r.Route("/auth", func(r chi.Router) {
-		// Local authentication endpoints
-		r.Route("/local", func(r chi.Router) {
-			// Register new user - POST /auth/local/register
-			r.Post("/register", Handler(handleRegister(deps)).Handle(deps))
-
-			// Sign in - POST /auth/local/login
-			r.Post("/login", Handler(handleSignIn(deps)).Handle(deps))
-		})
-
-		// Refresh session - POST /auth/refresh
-		r.Post("/refresh", Handler(handleRefresh(deps)).Handle(deps))
-
-		// Sign out - POST /auth/logout
-		r.Post("/logout", Handler(handleSignOut(deps)).Handle(deps))
+		registerAuthHandlers(r, deps)
 	})
+}
+
+// RegisterDomainAuthRoutes registers authentication routes directly (no /auth prefix).
+// Used for domain auth routes at /v1/_auth/{domain}/...
+func RegisterDomainAuthRoutes(r chi.Router, deps *Deps) {
+	registerAuthHandlers(r, deps)
+}
+
+// registerAuthHandlers wires the actual auth handler functions.
+func registerAuthHandlers(r chi.Router, deps *Deps) {
+	r.Route("/local", func(r chi.Router) {
+		r.Post("/register", Handler(handleRegister(deps)).Handle(deps))
+		r.Post("/login", Handler(handleSignIn(deps)).Handle(deps))
+	})
+	r.Post("/refresh", Handler(handleRefresh(deps)).Handle(deps))
+	r.Post("/logout", Handler(handleSignOut(deps)).Handle(deps))
+	r.Patch("/profile", Handler(handleUpdateProfile(deps)).Handle(deps))
 }
 
 // Auth request/response structures
@@ -137,7 +140,20 @@ func handleRefresh(deps *Deps) Handler {
 			return nil, ErrSessionExpired("Session expired")
 		}
 
-		return authCtx, nil
+		// Get user profile for the validated session
+		if authCtx.UID != "" && rc.AppName != "" {
+			user, err := deps.Auth.GetUser(r.Context(), rc.AppName, authCtx.UID)
+			if err == nil && user != nil {
+				return user, nil
+			}
+		}
+
+		// Fallback: return auth context as user-like object
+		return map[string]any{
+			"id":       authCtx.UID,
+			"meta":     authCtx.Meta,
+			"meta_app": authCtx.MetaApp,
+		}, nil
 	}
 }
 
@@ -166,5 +182,40 @@ func handleSignOut(deps *Deps) Handler {
 		}
 
 		return nil, nil // No content on successful sign out
+	}
+}
+
+func handleUpdateProfile(deps *Deps) Handler {
+	return func(r *http.Request, rc *RequestContext) (any, error) {
+		if !rc.Authenticated || rc.UserID == "" {
+			return nil, ErrUnauthorized("Authentication required")
+		}
+
+		var params map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&params); err != nil {
+			return nil, ErrBadRequest("INVALID_JSON", "Invalid JSON body")
+		}
+
+		if newUsername, ok := params["username"]; ok && newUsername != "" {
+			if err := deps.Auth.UpdateUsername(r.Context(), rc.AppName, rc.UserID, newUsername); err != nil {
+				if strings.Contains(err.Error(), "already taken") {
+					return nil, ErrBadRequest("USERNAME_TAKEN", "Username already taken")
+				}
+				return nil, ErrInternal("Failed to update username")
+			}
+		}
+
+		if newPassword, ok := params["password"]; ok && newPassword != "" {
+			if err := deps.Auth.UpdatePassword(r.Context(), rc.AppName, rc.UserID, newPassword); err != nil {
+				return nil, ErrInternal("Failed to update password")
+			}
+		}
+
+		user, err := deps.Auth.GetUser(r.Context(), rc.AppName, rc.UserID)
+		if err != nil {
+			return nil, ErrInternal("Failed to get updated user")
+		}
+
+		return user, nil
 	}
 }

@@ -41,11 +41,21 @@ func (h Handler) Handle(deps *Deps) http.HandlerFunc {
 		}
 
 		// Write success response
-		if result != nil {
-			writeSuccess(w, result)
-		} else {
+		if result == nil {
 			writeNoContent(w)
+			return
 		}
+
+		// List responses already contain {data, count, limit, offset} — write directly
+		if m, ok := result.(map[string]any); ok {
+			if _, hasData := m["data"]; hasData {
+				if _, hasCount := m["count"]; hasCount {
+					writeJSON(w, http.StatusOK, result)
+					return
+				}
+			}
+		}
+		writeSuccess(w, result)
 	}
 }
 
