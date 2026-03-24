@@ -9,16 +9,18 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// RegisterStorageRoutes registers file storage routes
+// RegisterStorageRoutes registers file storage routes using resource-based routing
+// Routes are: /upload, /files/{fileId}, /{fileId} (nested under /v1/storage/{app})
 func RegisterStorageRoutes(r chi.Router, deps *Deps) {
-	// Storage routes: /api/v1/{app}/storage
-	r.Route("/storage", func(r chi.Router) {
-		// Upload file - POST /storage/upload
-		r.Post("/upload", Handler(handleFileUpload(deps)).Handle(deps))
+	// Storage routes: directly under /v1/storage/{app}
+	// Upload file - POST /upload
+	r.Post("/upload", Handler(handleFileUpload(deps)).Handle(deps))
 
-		// Delete file - DELETE /storage/{fileId}
-		r.Delete("/{fileId}", Handler(handleFileDelete(deps)).Handle(deps))
-	})
+	// Get file metadata + access URL - GET /files/{fileId}
+	r.Get("/files/{fileId}", Handler(handleFileGet(deps)).Handle(deps))
+
+	// Delete file - DELETE /{fileId}
+	r.Delete("/{fileId}", Handler(handleFileDelete(deps)).Handle(deps))
 }
 
 // File upload handler
@@ -86,5 +88,30 @@ func handleFileDelete(deps *Deps) Handler {
 		}
 
 		return nil, nil // No content on successful delete
+	}
+}
+
+// File get handler
+func handleFileGet(deps *Deps) Handler {
+	return func(r *http.Request, rc *RequestContext) (any, error) {
+		// Check if storage is configured for this app
+		if deps.Storage == nil {
+			return nil, ErrStorageDisabled("Storage not configured for this app")
+		}
+
+		// Get file ID from URL
+		fileId := chi.URLParam(r, "fileId")
+		if fileId == "" {
+			return nil, ErrBadRequest("MISSING_FILE_ID", "File ID is required")
+		}
+
+		// Get file metadata and URL
+		fileDescriptor, err := deps.Storage.Get(r.Context(), rc.AppName, fileId)
+		if err != nil {
+			slog.Error("file get failed", "app", rc.AppName, "fileId", fileId, "error", err)
+			return nil, ErrNotFound("File not found")
+		}
+
+		return fileDescriptor, nil
 	}
 }

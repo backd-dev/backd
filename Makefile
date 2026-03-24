@@ -46,7 +46,7 @@ validate:
 # Start development stack
 docker-up:
 	@echo "Starting development stack ($(COMPOSE_CMD))..."
-	$(COMPOSE_CMD) up -d
+	$(COMPOSE_CMD) up -d --build
 
 # Stop development stack
 docker-down:

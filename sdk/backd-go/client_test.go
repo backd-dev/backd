@@ -9,8 +9,9 @@ import (
 
 func TestNewClient(t *testing.T) {
 	c := NewClient(ClientOptions{
-		APIBaseURL:       "http://localhost:8080/v1/myapp",
-		AuthBaseURL:      "http://localhost:8080/v1/_auth/mydomain",
+		APIBaseURL:       "http://localhost:8080/v1/data/myapp",
+		AuthBaseURL:      "http://localhost:8080/v1/auth/myapp",
+		StorageBaseURL:   "http://localhost:8080/v1/storage/myapp",
 		FunctionsBaseURL: "http://localhost:8081/v1/myapp",
 		PublishableKey:   "pk_test",
 	})

@@ -19,6 +19,9 @@ type Storage interface {
 	// Delete removes a file from S3 and the database
 	Delete(ctx context.Context, appName, fileID string) error
 
+	// Get retrieves file metadata and generates access URL
+	Get(ctx context.Context, appName, fileID string) (*FileDescriptor, error)
+
 	// ResolveFiles resolves all __file columns in query results
 	ResolveFiles(ctx context.Context, appName string, rows []map[string]any) ([]map[string]any, error)
 }

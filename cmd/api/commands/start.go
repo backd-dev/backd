@@ -99,6 +99,19 @@ var StartFunc func(ctx *commandkit.CommandContext) error = func(ctx *commandkit.
 		}
 	}
 
+	// Phase 2.5: Validate domain references in auth configuration
+	for appName, appConfig := range configSet.Apps {
+		if appConfig.Auth.Domain != "" {
+			if _, exists := configSet.Domains[appConfig.Auth.Domain]; !exists {
+				slog.Error("app references non-existent domain",
+					"app", appName, "domain", appConfig.Auth.Domain)
+				os.Exit(1)
+			}
+			slog.Info("app configured for domain auth",
+				"app", appName, "domain", appConfig.Auth.Domain)
+		}
+	}
+
 	// Phase 3: Derive per-app/domain encryption keys via HKDF (held in memory)
 	masterKey := []byte(serverCfg.EncryptionKey)
 	domainKeys := make(map[string][]byte)
@@ -179,6 +192,7 @@ var StartFunc func(ctx *commandkit.CommandContext) error = func(ctx *commandkit.
 	}
 
 	// Phase 7: Start services
+	slog.Info("about to call startServices")
 	return startServices(serverCfg, configSet, dbInstance, secretsInstance, celqlInstance, appStatus, mode)
 }
 
@@ -247,6 +261,8 @@ func provisionApp(ctx context.Context, dbInstance db.DB, secretsInstance secrets
 }
 
 func startServices(serverCfg *config.ServerConfig, configSet *config.ConfigSet, dbInstance db.DB, secretsInstance secrets.Secrets, celqlInstance celql.CELQL, appStatus map[string]string, mode string) error {
+	slog.Info("startServices function called")
+
 	authInstance := auth.NewAuth(dbInstance, celqlInstance, configSet)
 	functionsClient := functions.NewHTTPClient(serverCfg.FunctionsURL)
 
@@ -297,92 +313,16 @@ func startServices(serverCfg *config.ServerConfig, configSet *config.ConfigSet, 
 		FunctionsClient: functionsClient,
 	}
 
-	// Register routes for ready apps
-	for appName, status := range appStatus {
-		if status == "ready" {
-			appName := appName // capture for closure
+	// Register resource-based routes (new structure)
+	slog.Info("about to register resource-based routes")
+	registerResourceBasedRoutes(router, configSet, appStatus, storageInstances, deps)
 
-			// Register API routes for this app
-			router.Route(fmt.Sprintf("/v1/%s", appName), func(r chi.Router) {
-				// Inject AppName into RequestContext (route is literal, not {app} param)
-				r.Use(func(next http.Handler) http.Handler {
-					return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-						rc := api.RequestContextFrom(req.Context())
-						rc.AppName = appName
-						ctx := api.WithRequestContext(req.Context(), rc)
-						next.ServeHTTP(w, req.WithContext(ctx))
-					})
-				})
-
-				// Set per-app storage in a copy of deps
-				appDeps := *deps
-				if st, exists := storageInstances[appName]; exists {
-					appDeps.Storage = st
-				}
-
-				// Register CRUD routes
-				api.RegisterCRUDRoutes(r, &appDeps)
-
-				// Register auth routes (skip if auth.domain is set)
-				if appConfig := configSet.Apps[appName]; appConfig.Auth.Domain == "" {
-					api.RegisterAuthRoutes(r, &appDeps)
-				}
-
-				// Register storage routes if configured
-				if appDeps.Storage != nil {
-					api.RegisterStorageRoutes(r, &appDeps)
-				}
-
-				// Register functions routes
-				api.RegisterFunctionRoutes(r, &appDeps)
-			})
-
-			slog.Info("routes registered for app", "app", appName)
-		} else {
-			// Register 503 catch-all for failed apps
-			registerFailedAppRoutes(router, appName, status)
-			slog.Info("503 routes registered for failed app", "app", appName, "reason", status)
-		}
-	}
-
-	// Register domain auth routes at /v1/_auth/{domain}/...
-	// These routes use the domain name as the AppName context so auth operations
-	// route to the domain DB via resolveAuthDB.
-	for domainName := range configSet.Domains {
-		domainName := domainName // capture
-		// Find an app that uses this domain (for context)
-		domainAppName := ""
-		for appName, appCfg := range configSet.Apps {
-			if appCfg.Auth.Domain == domainName {
-				domainAppName = appName
-				break
-			}
-		}
-		if domainAppName == "" {
-			slog.Warn("domain has no associated app, skipping auth routes", "domain", domainName)
-			continue
-		}
-
-		appNameForDomain := domainAppName // capture
-		router.Route(fmt.Sprintf("/v1/_auth/%s", domainName), func(r chi.Router) {
-			// Inject AppName into request context for domain auth routes
-			r.Use(func(next http.Handler) http.Handler {
-				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-					rc := api.RequestContextFrom(req.Context())
-					rc.AppName = appNameForDomain
-					ctx := api.WithRequestContext(req.Context(), rc)
-					next.ServeHTTP(w, req.WithContext(ctx))
-				})
-			})
-			api.RegisterDomainAuthRoutes(r, deps)
-		})
-		slog.Info("domain auth routes registered", "domain", domainName, "app", appNameForDomain)
-	}
+	slog.Info("starting service startup")
 
 	// Add health check endpoint
 	router.Get("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"status":"ok"}`)
+		fmt.Fprintf(w, `{"status":"ok","version":"new-resource-routes"}`)
 	})
 
 	// Add readiness endpoint with detailed status
@@ -578,4 +518,68 @@ func failedAppHandler(reason string) http.Handler {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		fmt.Fprintf(w, `{"error":"SERVICE_UNAVAILABLE","error_detail":"app failed to start: %s"}`, reason)
 	})
+}
+
+// registerResourceBasedRoutes registers new resource-based routes alongside existing ones
+func registerResourceBasedRoutes(router chi.Router, configSet *config.ConfigSet,
+	appStatus map[string]string, storageInstances map[string]storage.Storage, deps *api.Deps) {
+
+	slog.Info("registering resource-based routes")
+
+	// Auth routes - ALL apps (domain logic handled in handlers)
+	router.Route("/v1/auth", func(r chi.Router) {
+		for appName := range configSet.Apps {
+			if appStatus[appName] == "ready" {
+				slog.Info("registering auth routes for app", "app", appName)
+				r.Route(fmt.Sprintf("/%s", appName), func(r chi.Router) {
+					r.Use(injectAppNameMiddleware(appName))
+					api.RegisterDomainAuthRoutes(r, deps)
+				})
+			}
+		}
+	})
+
+	// Data routes - re-enabled to test conflicts
+	router.Route("/v1/data", func(r chi.Router) {
+		for appName := range configSet.Apps {
+			if appStatus[appName] == "ready" {
+				slog.Info("registering data routes for app", "app", appName)
+				r.Route(fmt.Sprintf("/%s", appName), func(r chi.Router) {
+					r.Use(injectAppNameMiddleware(appName))
+					appDeps := *deps
+					if st, exists := storageInstances[appName]; exists {
+						appDeps.Storage = st
+					}
+					api.RegisterCRUDRoutes(r, &appDeps)
+				})
+			}
+		}
+	})
+
+	// Storage routes - re-enabled to test conflicts
+	router.Route("/v1/storage", func(r chi.Router) {
+		for appName := range configSet.Apps {
+			if appStatus[appName] == "ready" && storageInstances[appName] != nil {
+				slog.Info("registering storage routes for app", "app", appName)
+				r.Route(fmt.Sprintf("/%s", appName), func(r chi.Router) {
+					r.Use(injectAppNameMiddleware(appName))
+					appDeps := *deps
+					appDeps.Storage = storageInstances[appName]
+					api.RegisterStorageRoutes(r, &appDeps)
+				})
+			}
+		}
+	})
+}
+
+// injectAppNameMiddleware creates middleware that injects the app name into the request context
+func injectAppNameMiddleware(appName string) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			rc := api.RequestContextFrom(req.Context())
+			rc.AppName = appName
+			ctx := api.WithRequestContext(req.Context(), rc)
+			next.ServeHTTP(w, req.WithContext(ctx))
+		})
+	}
 }

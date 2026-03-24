@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -175,6 +176,17 @@ func (m *mockStorage) Delete(ctx context.Context, appName, fileID string) error 
 	return nil
 }
 
+func (m *mockStorage) Get(ctx context.Context, appName, fileID string) (*storage.FileDescriptor, error) {
+	return &storage.FileDescriptor{
+		ID:       fileID,
+		Filename: "test-file.txt",
+		MimeType: "text/plain",
+		Size:     1024,
+		Secure:   false,
+		URL:      "http://example.com/test-file.txt",
+	}, nil
+}
+
 func (m *mockStorage) ResolveFiles(ctx context.Context, appName string, rows []map[string]any) ([]map[string]any, error) {
 	return rows, nil
 }
@@ -194,6 +206,7 @@ func createTestDeps() *Deps {
 		Auth:            &mockAuth{},
 		Storage:         &mockStorage{},
 		FunctionsClient: &mockFunctions{},
+		Config:          &config.ConfigSet{}, // Add mock config
 	}
 }
 
@@ -527,7 +540,11 @@ func TestParseQueryParams(t *testing.T) {
 func TestAuthRoutes(t *testing.T) {
 	deps := createTestDeps()
 	r := chi.NewRouter()
-	RegisterAuthRoutes(r, deps)
+
+	// Test new auth route structure
+	r.Route("/v1/auth/testapp", func(r chi.Router) {
+		RegisterDomainAuthRoutes(r, deps)
+	})
 
 	t.Run("register user", func(t *testing.T) {
 		body := map[string]string{
@@ -536,7 +553,7 @@ func TestAuthRoutes(t *testing.T) {
 		}
 		bodyBytes, _ := json.Marshal(body)
 
-		req := httptest.NewRequest("POST", "/auth/local/register", bytes.NewReader(bodyBytes))
+		req := httptest.NewRequest("POST", "/v1/auth/testapp/local/register", bytes.NewReader(bodyBytes))
 		req = req.WithContext(WithRequestContext(req.Context(), &RequestContext{AppName: "testapp"}))
 		w := httptest.NewRecorder()
 
@@ -560,8 +577,56 @@ func TestAuthRoutes(t *testing.T) {
 		}
 		bodyBytes, _ := json.Marshal(body)
 
-		req := httptest.NewRequest("POST", "/auth/local/login", bytes.NewReader(bodyBytes))
+		req := httptest.NewRequest("POST", "/v1/auth/testapp/local/login", bytes.NewReader(bodyBytes))
 		req = req.WithContext(WithRequestContext(req.Context(), &RequestContext{AppName: "testapp"}))
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", w.Code)
+		}
+	})
+}
+
+// Test storage routes
+func TestStorageRoutes(t *testing.T) {
+	deps := createTestDeps()
+	r := chi.NewRouter()
+
+	r.Route("/v1/storage/testapp", func(r chi.Router) {
+		RegisterStorageRoutes(r, deps)
+	})
+
+	t.Run("upload file", func(t *testing.T) {
+		// Create multipart form
+		body := &bytes.Buffer{}
+		writer := multipart.NewWriter(body)
+		part, _ := writer.CreateFormFile("file", "test.txt")
+		part.Write([]byte("test content"))
+		writer.Close()
+
+		req := httptest.NewRequest("POST", "/v1/storage/testapp/upload", body)
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req = req.WithContext(WithRequestContext(req.Context(), &RequestContext{
+			AppName:       "testapp",
+			Authenticated: true,
+		}))
+		w := httptest.NewRecorder()
+
+		r.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", w.Code)
+		}
+	})
+
+	t.Run("get file metadata", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/v1/storage/testapp/files/test-file-id", nil)
+		req = req.WithContext(WithRequestContext(req.Context(), &RequestContext{
+			AppName:       "testapp",
+			Authenticated: true,
+		}))
 		w := httptest.NewRecorder()
 
 		r.ServeHTTP(w, req)

@@ -25,7 +25,7 @@ func (s *storageImpl) PresignURL(ctx context.Context, appName, fileID string) (s
 
 	// Get file record to get storage key
 	fileRecord, err := s.db.QueryOne(ctx, appName, `
-		SELECT storage_key, secure FROM _files WHERE _id = $1
+		SELECT storage_key, secure FROM _files WHERE id = $1
 	`, fileID)
 	if err != nil {
 		return "", fmt.Errorf("failed to query file record: %w", err)
@@ -69,7 +69,7 @@ func (s *storageImpl) DirectURL(ctx context.Context, appName, fileID string) (st
 
 	// Get file record to get storage key
 	fileRecord, err := s.db.QueryOne(ctx, appName, `
-		SELECT storage_key, secure FROM _files WHERE _id = $1
+		SELECT storage_key, secure FROM _files WHERE id = $1
 	`, fileID)
 	if err != nil {
 		return "", fmt.Errorf("failed to query file record: %w", err)

@@ -1,12 +1,15 @@
 package backd
 
-// ClientOptions configures a backd client.
+// ClientOptions configures a backd client using resource-based API endpoints.
 type ClientOptions struct {
-	// APIBaseURL is the base URL for CRUD operations (e.g. "http://localhost:8080/v1/myapp").
+	// APIBaseURL is the base URL for CRUD operations (e.g. "http://localhost:8080/v1/data/myapp").
 	APIBaseURL string
 
-	// AuthBaseURL is the base URL for auth operations (e.g. "http://localhost:8080/v1/_auth/mydomain").
+	// AuthBaseURL is the base URL for auth operations (e.g. "http://localhost:8080/v1/auth/myapp").
 	AuthBaseURL string
+
+	// StorageBaseURL is the base URL for storage operations (e.g. "http://localhost:8080/v1/storage/myapp").
+	StorageBaseURL string
 
 	// FunctionsBaseURL is the base URL for function calls (e.g. "http://localhost:8081/v1/myapp").
 	FunctionsBaseURL string

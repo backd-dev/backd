@@ -30,7 +30,7 @@ func RegisterInternalRoutes(r chi.Router, deps *Deps) {
 	})
 }
 
-func handleInternalHealth(deps *Deps) Handler {
+func handleInternalHealth(_ *Deps) Handler {
 	return func(r *http.Request, rc *RequestContext) (any, error) {
 		return map[string]any{
 			"status":  "ok",
@@ -39,7 +39,7 @@ func handleInternalHealth(deps *Deps) Handler {
 	}
 }
 
-func handleDenoExecute(deps *Deps) Handler {
+func handleDenoExecute(_ *Deps) Handler {
 	return func(r *http.Request, rc *RequestContext) (any, error) {
 		return map[string]any{
 			"message": "Deno execution endpoint - not yet implemented",
@@ -103,7 +103,7 @@ func handleJobClaim(deps *Deps) Handler {
 	}
 }
 
-func handleJobComplete(deps *Deps) Handler {
+func handleJobComplete(_ *Deps) Handler {
 	return func(r *http.Request, rc *RequestContext) (any, error) {
 		jobId := chi.URLParam(r, "jobId")
 		if jobId == "" {
@@ -117,7 +117,7 @@ func handleJobComplete(deps *Deps) Handler {
 	}
 }
 
-func handleJobFail(deps *Deps) Handler {
+func handleJobFail(_ *Deps) Handler {
 	return func(r *http.Request, rc *RequestContext) (any, error) {
 		jobId := chi.URLParam(r, "jobId")
 		if jobId == "" {

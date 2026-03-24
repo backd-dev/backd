@@ -24,10 +24,11 @@ func sanitizeIdentifier(name string) (string, error) {
 	return name, nil
 }
 
-// RegisterCRUDRoutes registers all CRUD routes for collections
+// RegisterCRUDRoutes registers all CRUD routes for collections using resource-based routing
+// Pattern: /{collection} (nested under resource-based path /v1/data/{app})
 func RegisterCRUDRoutes(r chi.Router, deps *Deps) {
 	// CRUD routes for all collections
-	// Pattern: /api/v1/{app}/{collection}
+	// Full pattern: /v1/data/{app}/{collection}
 	r.Route("/{collection}", func(r chi.Router) {
 		// List collection items - GET /{collection}
 		r.Get("/", makeCRUDHandler(deps, "LIST").Handle(deps))

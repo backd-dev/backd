@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	defaultAPIURL       = "http://localhost:8080/v1/test_app"
-	defaultAuthURL      = "http://localhost:8080/v1/_auth/test_domain"
+	defaultAPIURL       = "http://localhost:8080/v1/data/test_app"
+	defaultAuthURL      = "http://localhost:8080/v1/auth/test_app"
+	defaultStorageURL   = "http://localhost:8080/v1/storage/test_app"
 	defaultFunctionsURL = "http://localhost:8081/v1/test_app"
 	defaultPublishable  = "pk_test_e2e_key_1234567890abcdef"
 )
@@ -39,6 +40,13 @@ func functionsURL() string {
 	return defaultFunctionsURL
 }
 
+func storageURL() string {
+	if v := os.Getenv("BACKD_STORAGE_URL"); v != "" {
+		return v
+	}
+	return defaultStorageURL
+}
+
 func publishableKey() string {
 	if v := os.Getenv("BACKD_PUBLISHABLE_KEY"); v != "" {
 		return v
@@ -52,6 +60,7 @@ func newTestClient(t *testing.T) *backd.Client {
 	return backd.NewClient(backd.ClientOptions{
 		APIBaseURL:       apiURL(),
 		AuthBaseURL:      authURL(),
+		StorageBaseURL:   storageURL(),
 		FunctionsBaseURL: functionsURL(),
 		PublishableKey:   publishableKey(),
 	})
